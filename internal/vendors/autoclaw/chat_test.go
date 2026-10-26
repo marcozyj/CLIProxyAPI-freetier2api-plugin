@@ -229,3 +229,34 @@ func TestPrepareBodyKeepsUnparsableBody(t *testing.T) {
 		t.Fatalf("non-JSON body must pass through, got %q", got)
 	}
 }
+
+// TestPrepareBodyAddsToolingWhenSystemHasOnlyIdentityLine 验证：客户端自带身份句
+// 但漏了「## Tooling」段时，出站前必须补齐该段——闸门是 AND 关系，只满足一半
+// 仍会 406 空响应。
+func TestPrepareBodyAddsToolingWhenSystemHasOnlyIdentityLine(t *testing.T) {
+	body := messagesPayload(t, nil,
+		map[string]any{"role": "system", "content": identityLine + "\n\nbe brief"},
+		map[string]any{"role": "user", "content": "hi"},
+	)
+	payload := preparePayload(t, body, "")
+
+	text, _ := firstMessage(t, payload)["content"].(string)
+	if !strings.HasPrefix(text, identityLine) {
+		t.Fatalf("system must keep starting with the identity line: %q", text)
+	}
+	if !strings.Contains(text, "## Tooling") {
+		t.Fatalf("missing Tooling section is not repaired: %q", text)
+	}
+	if !strings.HasSuffix(text, "be brief") {
+		t.Fatalf("original text must be kept verbatim: %q", text)
+	}
+	if count := strings.Count(text, identityLine); count != 1 {
+		t.Fatalf("identity line appears %d times, want 1: %q", count, text)
+	}
+
+	reencoded, _ := json.Marshal(payload)
+	again := prepareBody(reencoded, "")
+	if string(again) != string(reencoded) {
+		t.Fatalf("prepareBody is not idempotent after repair:\nonce:  %s\ntwice: %s", reencoded, again)
+	}
+}

@@ -81,11 +81,14 @@ func (p modelConfigPayload) entries() []modelConfigEntry {
 	return p.Data.Models
 }
 
-// cnStaticModels 是国内版沙箱 relay 通道的模型表（Agent2API 2026-09 快照）。
+// cnStaticModels 是国内版沙箱 relay 通道的模型表。
+//
+// 2026-10-27 用真实账号逐条实打校准：glm-5.3-flash / glm-2 / openclaw /
+// openclaw/default / tdpsk_* 上游已回「非法模型」或「unknown provider」，
+// 只保留仍在线的四条。国内通道没有可用的 HTTP 模型清单端点，只能静态维护，
+// 因此上游再下线时靠 Catalog 的「死模型自动摘除」兜底，而不是等这里更新。
 var cnStaticModels = []string{
-	"openclaw", "openclaw/default", "glm-5.3-flash", "glm-2", "zai_auto",
-	"zai_auto-fast", "zai_glm-5.3-flash", "zaicoding_glm-5.3",
-	"tdpsk_deepseek-v4-flash-202605", "tdpsk_deepseek-v4-pro-202606",
+	"zai_auto", "zai_auto-fast", "zai_glm-5.3-flash", "zaicoding_glm-5.3",
 }
 
 // FetchModels 拉取区域模型清单。
@@ -96,10 +99,19 @@ func FetchModels(ctx context.Context, baseURL string, token string, region Regio
 	if strings.TrimSpace(baseURL) == "" {
 		return nil, fmt.Errorf("upstream base URL is not configured")
 	}
-	if region.IsGlobal() {
-		return fetchModelConfig(ctx, baseURL, token)
+	// 国内外都先试实时目录：CN 的同一路径也会返回模型配置（含计费档位），
+	// 拉不到再退回静态表——静态表没有倍率，能走实时就走实时。
+	models, errFetch := fetchModelConfig(ctx, baseURL, token)
+	if errFetch == nil {
+		return models, nil
 	}
-	return staticCNModels(), nil
+	if region.IsGlobal() {
+		return nil, errFetch
+	}
+	if static := staticCNModels(); len(static) > 0 {
+		return static, nil
+	}
+	return nil, errFetch
 }
 
 // fetchModelConfig 拉取国际版实时模型配置。

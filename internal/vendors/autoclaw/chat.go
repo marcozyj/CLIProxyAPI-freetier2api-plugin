@@ -380,9 +380,7 @@ func rewriteIdentities(message map[string]any) {
 func prependIdentity(message map[string]any) {
 	switch content := message["content"].(type) {
 	case string:
-		if !strings.HasPrefix(content, identityLine) {
-			message["content"] = joinIdentity(content)
-		}
+		message["content"] = ensureIdentityGate(content)
 	case []any:
 		for _, item := range content {
 			part, okPart := item.(map[string]any)
@@ -393,15 +391,33 @@ func prependIdentity(message map[string]any) {
 			if !okText {
 				continue
 			}
-			if !strings.HasPrefix(text, identityLine) {
-				part["text"] = joinIdentity(text)
-			}
+			part["text"] = ensureIdentityGate(text)
 			return
 		}
 		message["content"] = append([]any{map[string]any{"type": "text", "text": identityPrefix}}, content...)
 	default:
 		message["content"] = identityPrefix
 	}
+}
+
+// ensureIdentityGate 保证一条 system 正文同时满足闸门的两个条件：以身份句开头，
+// 且带「## Tooling」段。
+//
+// 只检查身份句是不够的：客户端（尤其自带 system 的 Claude Code / Codex 桥）
+// 经常抄到身份句却没有 Tooling 段，出站照样 406 空响应。缺段时把前缀里身份句
+// 之后的部分补进去，原文逐字保留；两段都齐时原样返回，保证重复出站幂等。
+func ensureIdentityGate(content string) string {
+	if !strings.HasPrefix(content, identityLine) {
+		return joinIdentity(content)
+	}
+	if strings.Contains(content, "## Tooling") {
+		return content
+	}
+	rest := strings.TrimLeft(content[len(identityLine):], "\n")
+	if rest == "" {
+		return identityPrefix
+	}
+	return identityPrefix + "\n" + rest
 }
 
 // joinIdentity 返回前缀 + 一个空行 + 原文（原文为空时不补空行）。

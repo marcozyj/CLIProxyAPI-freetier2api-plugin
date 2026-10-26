@@ -173,3 +173,60 @@ func TestAdapterModelCredits(t *testing.T) {
 		t.Fatal("没有档位的模型不应进表")
 	}
 }
+
+// TestFetchModelsCNPrefersLiveCatalog 锁定国内版也走实时目录。
+//
+// 实况（2026-10-27）：国内版同一路径也能拿到 models[]，且带
+// creditConsumptionLevel（低/中/高）与真实 contextWindow。静态表只是兜底：
+// 它没有倍率，也没有最新上架的模型。
+func TestFetchModelsCNPrefersLiveCatalog(t *testing.T) {
+	useLoopbackHost(t)
+	baseURL := serveModels(t, modelConfigTopLevelFixture)
+
+	models, errFetch := FetchModels(context.Background(), baseURL, "tok-abc", RegionCN)
+	if errFetch != nil {
+		t.Fatalf("fetch models: %v", errFetch)
+	}
+	if len(models) != 3 {
+		t.Fatalf("models = %d, want 3（实时目录）", len(models))
+	}
+	if models[0].ContextWindow != 1048576 {
+		t.Fatalf("context = %d, want 1048576", models[0].ContextWindow)
+	}
+}
+
+// TestFetchModelsCNFallsBackToStatic 锁定国内版拉取失败时的静态兜底。
+func TestFetchModelsCNFallsBackToStatic(t *testing.T) {
+	useLoopbackHost(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"code":500,"msg":"boom"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	models, errFetch := FetchModels(context.Background(), server.URL, "tok-abc", RegionCN)
+	if errFetch != nil {
+		t.Fatalf("国内版应兜底静态表，却报错: %v", errFetch)
+	}
+	if len(models) == 0 {
+		t.Fatal("静态兜底不能为空")
+	}
+	if models[0].Credits != "" {
+		t.Fatalf("静态表不该编造倍率，got %q", models[0].Credits)
+	}
+}
+
+// TestFetchModelsGlobalPropagatesError 锁定国际版不兜底：拉不到就要报错，
+// 否则控制台会把「网络故障」显示成「模型只有这几条」。
+func TestFetchModelsGlobalPropagatesError(t *testing.T) {
+	useLoopbackHost(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"code":500,"msg":"boom"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	if _, errFetch := FetchModels(context.Background(), server.URL, "tok-abc", RegionGlobal); errFetch == nil {
+		t.Fatal("国际版拉取失败必须报错")
+	}
+}
