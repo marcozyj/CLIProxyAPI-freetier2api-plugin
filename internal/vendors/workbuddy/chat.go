@@ -1567,6 +1567,13 @@ func PrepareBody(body []byte, opts PrepareOptions) []byte {
 
 	// 9) 思维链注入。
 	injectThinking(payload, defaultEffortFor(opts.DefaultEfforts, model))
+	// 9.5) 只认单一档位的模型必须显式带档位。
+	//
+	// 实测（2026-10-27，CN）：glm-5.1 的 supportedEfforts 只有 "medium"，
+	// 请求里不写 reasoning_effort 时上游直接 400「the reasoning effort value
+	// is not supported」，写了 medium 就正常。这类模型没有默认档可借，
+	// 而唯一合法值就是答案，补上即可。
+	injectSoleEffort(payload, model, opts.SupportedEfforts)
 
 	// 10) 档位归一。
 	normalizeReasoningEffort(payload, opts.SupportedEfforts[model])
@@ -1915,6 +1922,39 @@ func ensureDeepSeekEffort(payload map[string]any, defaultEffort string) {
 		effort = defaultDeepSeekEffort
 	}
 	payload["reasoning_effort"] = effort
+}
+
+// injectSoleEffort 给「只支持一个档位」的模型补上那个档位。
+//
+// 只在请求未带任何档位字段、且模型恰好只有一个合法档位时动手：多档位模型
+// 缺省一般有服务端默认值，擅自补档会改变计费与输出风格。
+func injectSoleEffort(payload map[string]any, model string, supported map[string][]string) {
+	if reasoningEffortPresent(payload) {
+		return
+	}
+	levels := supported[model]
+	if len(levels) != 1 {
+		return
+	}
+	if level := strings.TrimSpace(levels[0]); level != "" {
+		payload["reasoning_effort"] = level
+	}
+}
+
+// reasoningEffortPresent 报告请求里是否已有档位（三种写法都算）。
+func reasoningEffortPresent(payload map[string]any) bool {
+	if _, okSnake := payload["reasoning_effort"]; okSnake {
+		return true
+	}
+	if _, okCamel := payload["reasoningEffort"]; okCamel {
+		return true
+	}
+	if reasoning, okReasoning := payload["reasoning"].(map[string]any); okReasoning {
+		if _, okEffort := reasoning["effort"]; okEffort {
+			return true
+		}
+	}
+	return false
 }
 
 // normalizeReasoningEffort 把档位降到模型支持的范围。

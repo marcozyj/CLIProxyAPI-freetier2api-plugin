@@ -486,3 +486,34 @@ func TestSanitizeMessagesCoversToolArguments(t *testing.T) {
 		t.Fatal("tool_call arguments must be sanitized even when content is null")
 	}
 }
+
+// TestPrepareBodySoleEffortLevelIsInjected 锁定「只认单一档位」的模型行为。
+//
+// 实况（2026-10-27，CN）：glm-5.1 的 supportedEfforts 只有 medium，请求不带
+// reasoning_effort 时上游直接 400「the reasoning effort value is not supported」。
+// 唯一合法档位就是答案，请求缺省时补上；多档位模型不补。
+func TestPrepareBodySoleEffortLevelIsInjected(t *testing.T) {
+	payload := prepareTest(t, `{"model":"glm-5.1","messages":[]}`, PrepareOptions{
+		SupportedEfforts: map[string][]string{"glm-5.1": {"medium"}},
+	})
+	if payload["reasoning_effort"] != "medium" {
+		t.Fatalf("reasoning_effort = %v, want medium", payload["reasoning_effort"])
+	}
+
+	// 多档位模型：没有默认档就不猜。
+	payload = prepareTest(t, `{"model":"deepseek-v4-flash","messages":[]}`, PrepareOptions{
+		SupportedEfforts: map[string][]string{"deepseek-v4-flash": {"low", "high", "xhigh"}},
+	})
+	if _, okEffort := payload["reasoning_effort"]; okEffort && payload["reasoning_effort"] != "high" {
+		t.Fatalf("多档位模型不应被塞入非默认档，got %v", payload["reasoning_effort"])
+	}
+
+	// 调用方显式给的档位优先，不被覆盖。
+	payload = prepareTest(t, `{"model":"glm-5.1","reasoning_effort":"low","messages":[]}`, PrepareOptions{
+		SupportedEfforts: map[string][]string{"glm-5.1": {"medium"}},
+	})
+	if payload["reasoning_effort"] != "medium" {
+		// 显式 low 不在支持列表里，normalizeReasoningEffort 会归一到 medium。
+		t.Fatalf("显式档位应被归一到支持档，got %v", payload["reasoning_effort"])
+	}
+}
