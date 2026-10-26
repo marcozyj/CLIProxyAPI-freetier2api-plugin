@@ -1,0 +1,114 @@
+name: release
+
+# 打 v* 标签时构建五个平台的 c-shared 动态库并发布到 Release。
+#
+# 资产命名必须与插件商店的匹配规则一致：
+#   freetier2api_<version>_<os>_<arch>.zip   内含 freetier2api.{so,dylib,dll}
+#   checksums.txt                            sha256 汇总
+# 名称不一致 = 商店里点安装后静默失败，所以这里把命名写死。
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.os }}/${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: linux, arch: amd64, runner: ubuntu-latest }
+          - { os: linux, arch: arm64, runner: ubuntu-latest }
+          - { os: darwin, arch: amd64, runner: macos-13 }
+          - { os: darwin, arch: arm64, runner: macos-14 }
+          - { os: windows, arch: amd64, runner: windows-latest }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Install aarch64 cross compiler
+        if: matrix.os == 'linux' && matrix.arch == 'arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Install MinGW
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: choco install mingw -y --no-progress
+
+      - name: Build
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          case "$GOOS" in
+            linux)   ext=so ;;
+            darwin)  ext=dylib ;;
+            windows) ext=dll ;;
+          esac
+          if [ "$GOOS" = "linux" ] && [ "$GOARCH" = "arm64" ]; then
+            export CC=aarch64-linux-gnu-gcc
+          fi
+          mkdir -p dist
+          go build -buildmode=c-shared -ldflags="-s -w" -o "dist/freetier2api.$ext" .
+          ls -l dist
+
+      - name: Package (unix)
+        if: matrix.os != 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          cd dist
+          zip -q "freetier2api_${version}_${{ matrix.os }}_${{ matrix.arch }}.zip" freetier2api.*
+          ls -l
+
+      - name: Package (windows)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v',''
+          Compress-Archive -Path dist\freetier2api.dll -DestinationPath "dist\freetier2api_${version}_windows_${{ matrix.arch }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: freetier2api-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: publish
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd artifacts
+          sha256sum *.zip > checksums.txt
+          cat checksums.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*.zip
+            artifacts/checksums.txt
+          fail_on_unmatched_files: true
+          generate_release_notes: true
