@@ -391,3 +391,34 @@ func TestCreditsChangeTriggersPersist(t *testing.T) {
 		t.Fatalf("persisted credits = %q, want 0.80X after repricing", got)
 	}
 }
+
+// TestMarkModelGoneHidesModelFromEveryList 验证死模型摘除对三条读取路径同时生效：
+// 注册清单、按供应商过滤、控制台回读状态。
+func TestMarkModelGoneHidesModelFromEveryList(t *testing.T) {
+	manager := newTestCatalog(t)
+	manager.CacheProbedModels("workbuddycn", []pluginapi.ModelInfo{{ID: "GLM-5.2"}, {ID: "GLM-5.3"}})
+
+	manager.MarkModelGone("workbuddycn", "GLM-5.3")
+
+	registered := manager.Registered("workbuddycn")
+	if len(registered) != 1 || registered[0].ID != "GLM-5.2" {
+		t.Fatalf("Registered = %+v, want only GLM-5.2", registered)
+	}
+	filtered := manager.FilterForVendor("workbuddycn", []pluginapi.ModelInfo{{ID: "GLM-5.2"}, {ID: "GLM-5.3"}})
+	if len(filtered) != 1 || filtered[0].ID != "GLM-5.2" {
+		t.Fatalf("FilterForVendor = %+v, want only GLM-5.2", filtered)
+	}
+	for _, cached := range manager.CachedState() {
+		if cached.VendorID == "workbuddycn" && cached.ID == "GLM-5.3" {
+			t.Fatal("CachedState must not restore the removed model")
+		}
+	}
+
+	// 另一家供应商的同名模型不受影响。
+	if manager.IsModelGone("workbuddyglobal", "GLM-5.3") {
+		t.Fatal("tombstone must be scoped per vendor")
+	}
+	// 空参数是 no-op，不能 panic 或写出脏键。
+	manager.MarkModelGone("", "GLM-5.3")
+	manager.MarkModelGone("workbuddycn", "")
+}

@@ -85,6 +85,7 @@ func (a *App) handleExecutorExecute(request []byte) ([]byte, error) {
 
 	response, errExecute := prepared.vendor.Execute(ctx, prepared.credential, prepared.executeRequest())
 	if errExecute != nil {
+		a.noteModelGone(prepared, errExecute)
 		return nil, core.ToPluginError(errExecute)
 	}
 	return core.OKEnvelope(response)
@@ -117,6 +118,24 @@ func (a *App) handleExecutorExecuteStream(request []byte) ([]byte, error) {
 	}()
 
 	return core.OKEnvelope(rpcExecutorStreamResponse{Headers: streamHeaders})
+}
+
+// noteModelGone 在上游明确回报「没有这个模型」时把它从清单里摘掉。
+//
+// 只在真实对话链路上记录：不额外发探测请求，也就不额外消耗额度或触发风控；
+// 摘除窗口由 Catalog 控制（到期自动恢复，避免一次误判永久丢模型）。
+func (a *App) noteModelGone(prepared preparedExecution, err error) {
+	if prepared.vendor == nil || !core.ModelUnavailable(err) {
+		return
+	}
+	model := strings.TrimSpace(prepared.model)
+	if model == "" {
+		model = strings.TrimSpace(prepared.executeRequest().Model)
+	}
+	if model == "" || a.models == nil {
+		return
+	}
+	a.models.MarkModelGone(prepared.vendor.ID(), model)
 }
 
 // rewritePayloadModel 把请求体里的 model 字段改写成官方 ID。
@@ -153,6 +172,7 @@ func (a *App) runStreamExecution(streamCtx context.Context, cancelStream context
 	errForward := prepared.vendor.ExecuteStream(ctx, prepared.credential, prepared.executeRequest(), sink)
 	// 下游主动断开会取消上下文，那不是错误，不该发错误帧给客户端。
 	if errForward != nil && streamCtx.Err() == nil {
+		a.noteModelGone(prepared, errForward)
 		closeStream(callbackID, streamID, streamFailureMessage(errForward))
 		return
 	}

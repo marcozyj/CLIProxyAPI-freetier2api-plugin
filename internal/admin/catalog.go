@@ -52,6 +52,11 @@ type Catalog struct {
 	probeMu sync.Mutex
 	probing map[string]chan struct{}
 	probeAt map[string]time.Time
+
+	// gone 记录「上游明确回报模型不存在」的模型与摘除到期时间。
+	// 控制台与注册路径都会跳过未到期的条目：死模型不再出现在 /v1/models。
+	goneMu sync.Mutex
+	gone   map[string]time.Time
 }
 
 // cachedVendor 是一个供应商的控制台回读缓存。
@@ -77,6 +82,7 @@ func NewCatalog(store *state.Store, registry *core.Registry) *Catalog {
 		cached:   map[string]cachedVendor{},
 		probing:  map[string]chan struct{}{},
 		probeAt:  map[string]time.Time{},
+		gone:     map[string]time.Time{},
 	}
 }
 
@@ -253,9 +259,56 @@ func (c *Catalog) FilterForVendor(vendorID string, models []pluginapi.ModelInfo)
 		if c.IsDisabled(vendorID, model.ID) {
 			continue
 		}
+		if c.IsModelGone(vendorID, model.ID) {
+			continue
+		}
 		out = append(out, model)
 	}
 	return out
+}
+
+const (
+	// modelGoneTTL 是「上游说模型不存在」的摘除时长。上游下线模型后不会自己
+	// 回来，用 TTL 而不是永久摘除，是为了让误判（上游临时把 429/风控包装成
+	// 400）有机会自动恢复。
+	modelGoneTTL = 6 * time.Hour
+)
+
+// MarkModelGone 记录某供应商的某模型已被上游判为不存在。
+//
+// 触发点是真实对话的失败响应，而不是定时探测：探测要额外消耗额度，还可能
+// 触发上游风控；真实请求本来就打到了上游，顺手记一笔成本为零。
+func (c *Catalog) MarkModelGone(vendorID, modelID string) {
+	vendorID = strings.TrimSpace(vendorID)
+	modelID = strings.TrimSpace(modelID)
+	if vendorID == "" || modelID == "" {
+		return
+	}
+	c.goneMu.Lock()
+	c.gone[goneKey(vendorID, modelID)] = time.Now().Add(modelGoneTTL)
+	c.goneMu.Unlock()
+	logger.Info("models: %s/%s marked unavailable by upstream; hidden for %s",
+		vendorID, modelID, modelGoneTTL)
+}
+
+// IsModelGone 报告某模型是否仍在摘除窗口内。
+func (c *Catalog) IsModelGone(vendorID, modelID string) bool {
+	key := goneKey(vendorID, modelID)
+	c.goneMu.Lock()
+	defer c.goneMu.Unlock()
+	until, ok := c.gone[key]
+	if !ok {
+		return false
+	}
+	if time.Now().After(until) {
+		delete(c.gone, key)
+		return false
+	}
+	return true
+}
+
+func goneKey(vendorID, modelID string) string {
+	return vendorID + "\x00" + modelID
 }
 
 // SetDisabled 批量设置禁用状态，落盘并返回归一后的清单。
@@ -440,8 +493,19 @@ func equalCachedModels(a, b []core.CachedModel) bool {
 // Registered 返回某供应商最近一次的官方模型清单。
 func (c *Catalog) Registered(vendorID string) []pluginapi.ModelInfo {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return append([]pluginapi.ModelInfo(nil), c.cached[vendorID].models...)
+	models := append([]pluginapi.ModelInfo(nil), c.cached[vendorID].models...)
+	c.mu.RUnlock()
+	if len(models) == 0 {
+		return models
+	}
+	out := make([]pluginapi.ModelInfo, 0, len(models))
+	for _, model := range models {
+		if c.IsModelGone(vendorID, model.ID) {
+			continue
+		}
+		out = append(out, model)
+	}
+	return out
 }
 
 const (
@@ -604,6 +668,9 @@ func (c *Catalog) CachedState() []core.CachedModel {
 	out := make([]core.CachedModel, 0, 64)
 	for vendorID, entry := range c.cached {
 		for _, model := range entry.models {
+			if c.IsModelGone(vendorID, model.ID) {
+				continue
+			}
 			cachedModel := core.CachedModel{
 				VendorID: vendorID, ID: model.ID, Name: model.Name,
 				Description: model.Description, ContextLength: model.ContextLength,

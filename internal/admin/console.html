@@ -197,6 +197,30 @@ input.aliasinput:focus { outline: none; border-color: var(--accent); box-shadow:
 
 #models { overflow-x: auto; }
 #models table { min-width: 980px; }
+/* 行高略松：模型一多也不会看成一片 */
+#models tbody td { padding-top: 9px; padding-bottom: 9px; }
+/* 分组标题行：供应商名 + 模型/启用计数；分隔行不参与 hover 高亮 */
+#models tbody tr.group-row td { padding: 20px 10px 8px; border-bottom: 1px solid var(--border-strong); background: transparent; }
+#models tbody tr.group-row:hover td { background: transparent; box-shadow: none; }
+#models tbody tr.group-row:first-child td { padding-top: 6px; }
+.group-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.group-head .group-count { color: var(--muted); font-size: 12px; font-weight: 500; }
+
+/* 窄屏（手机 / 分屏）：表格改卡片，一个模型一张卡；空值与「—」不占行，彻底去掉横向滚动 */
+@media (max-width: 760px) {
+  #models table { min-width: 0; }
+  #models thead { display: none; }
+  #models tbody tr { display: block; margin: 0 0 10px; padding: 4px 2px; border: 1px solid var(--border); border-radius: 12px; }
+  #models tbody tr.group-row { display: block; margin: 16px 0 4px; padding: 0; border: none; }
+  #models tbody tr.group-row td { padding: 0 4px; border-bottom: none; }
+  #models tbody td { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+                     padding: 7px 12px; border-bottom: none; white-space: normal; text-align: right; }
+  #models tbody td::before { content: attr(data-label); color: var(--muted); font-size: 12px; font-weight: 600;
+                             text-align: left; flex: 0 0 auto; }
+  #models tbody td.col-check, #models tbody td.col-status { justify-content: flex-start; gap: 10px; }
+  #models tbody td.is-empty { display: none; }
+  #models .modelidname, #models .name-text { max-width: 62vw; }
+}
 #models .col-check { width: 1%; text-align: center; padding-left: 8px; padding-right: 4px; }
 #models .col-status, #models .col-vendor { width: 1%; white-space: nowrap; }
 #models .modelidname { display: inline-block; max-width: clamp(120px, 14vw, 200px);
@@ -1434,6 +1458,10 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
     }
     var columns = visibleColumns();
     var table = el("table");
+    // 显式建 thead/tbody：CSS 的窄屏卡片模式与分组分隔行都按这两个元素定位；
+    // 直接把 <tr> 挂到 <table> 上会让选择器落空（浏览器不会自动补 tbody）。
+    var thead = el("thead");
+    var body = el("tbody");
     var head = el("tr");
     columns.forEach(function (col) {
       var headerText = col.header;
@@ -1459,17 +1487,55 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
       }
       head.appendChild(th);
     });
-    table.appendChild(head);
+    thead.appendChild(head);
+    table.appendChild(thead);
 
+    // 按供应商分组：同一家供应商的模型连续排列，组间用一条分隔行留白。
+    // 分组只改变渲染顺序，不改变列定义、筛选与排序语义。
+    var groups = [];
+    var groupIndex = {};
     list.forEach(function (model) {
-      var row = el("tr");
-      columns.forEach(function (col) {
-        var cell = col.cell(model);
-        cell.className = (cell.className ? cell.className + " " : "") + "col-" + col.key;
-        row.appendChild(cell);
-      });
-      table.appendChild(row);
+      var label = vendorLabel(model.vendor_id, model.realm);
+      var key = String(model.vendor_id || "") + "|" + label;
+      if (!Object.prototype.hasOwnProperty.call(groupIndex, key)) {
+        groupIndex[key] = groups.length;
+        groups.push({ label: label, vendorID: model.vendor_id, realm: model.realm, models: [] });
+      }
+      groups[groupIndex[key]].models.push(model);
     });
+
+    groups.forEach(function (group) {
+      var enabled = 0;
+      group.models.forEach(function (model) { if (!model.disabled) enabled++; });
+
+      var groupRow = el("tr", null, "group-row");
+      var groupCell = el("td");
+      groupCell.colSpan = columns.length;
+      var headBox = el("div", null, "group-head");
+      headBox.appendChild(pill(group.label, vendorChipClass(group.vendorID, group.label)));
+      headBox.appendChild(el("span", group.models.length + " 个模型", "group-count"));
+      headBox.appendChild(el("span", enabled + " 个启用", "group-count"));
+      groupCell.appendChild(headBox);
+      groupRow.appendChild(groupCell);
+      body.appendChild(groupRow);
+
+      group.models.forEach(function (model) {
+        var row = el("tr");
+        columns.forEach(function (col) {
+          var cell = col.cell(model);
+          cell.className = (cell.className ? cell.className + " " : "") + "col-" + col.key;
+          // 卡片作业时用 ::before 显示列名（data-label），无需改各单元格实现。
+          cell.setAttribute("data-label", col.header);
+          if (col.key !== "check") {
+            var text = String(cell.textContent || "").trim();
+            if (!text || text === "—") cell.className += " is-empty";
+          }
+          row.appendChild(cell);
+        });
+        body.appendChild(row);
+      });
+    });
+    table.appendChild(body);
     host.appendChild(table);
   }
 
