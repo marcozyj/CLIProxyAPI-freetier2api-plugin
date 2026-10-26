@@ -30,34 +30,42 @@ func newTagTestCatalog(t *testing.T, tagMode string) *Catalog {
 }
 
 // TestChannelTagPrefixRenamesAndResolves 验证 prefix 模式：对外 ID 带供应商
-// 前缀，请求侧剥前缀还原官方 ID，未带前缀的原名同样可解析。
+// 缩写前缀（zc = zcode），请求侧剥前缀还原官方 ID；不带前缀的原名、以及
+// 加缩写之前的旧前缀（裸 vendorID）都仍可解析。
 func TestChannelTagPrefixRenamesAndResolves(t *testing.T) {
 	c := newTagTestCatalog(t, ModelNameTagPrefix)
 	out := c.ApplyAliases("zcode", []pluginapi.ModelInfo{{ID: "GLM-5.3", Name: "GLM-5.3", DisplayName: "GLM-5.3"}})
-	if len(out) != 1 || out[0].ID != "zcode-GLM-5.3" {
+	if len(out) != 1 || out[0].ID != "zc-GLM-5.3" {
 		t.Fatalf("tagged id = %+v", out)
 	}
-	if got := c.ResolveOutboundModel("zcode", "zcode-GLM-5.3"); got != "GLM-5.3" {
+	if got := c.ResolveOutboundModel("zcode", "zc-GLM-5.3"); got != "GLM-5.3" {
 		t.Fatalf("untag resolve = %q", got)
+	}
+	// 旧形态（裸 vendorID 前缀）也要能还原：客户端可能还缓存着它。
+	if got := c.ResolveOutboundModel("zcode", "zcode-GLM-5.3"); got != "GLM-5.3" {
+		t.Fatalf("legacy prefix resolve = %q", got)
 	}
 	if got := c.ResolveOutboundModel("zcode", "GLM-5.3"); got != "GLM-5.3" {
 		t.Fatalf("bare passthrough = %q", got)
 	}
 	// 其他供应商的请求不受影响（前缀只剥自己的 vendor 名）。
-	if got := c.ResolveOutboundModel("workbuddycn", "zcode-GLM-5.3"); got != "zcode-GLM-5.3" {
+	if got := c.ResolveOutboundModel("workbuddycn", "zc-GLM-5.3"); got != "zc-GLM-5.3" {
 		t.Fatalf("other vendor passthrough = %q", got)
 	}
 }
 
-// TestChannelTagSuffixRenames 验证 suffix 模式。
+// TestChannelTagSuffixRenames 验证 suffix 模式：官方 ID + 供应商缩写。
 func TestChannelTagSuffixRenames(t *testing.T) {
 	c := newTagTestCatalog(t, ModelNameTagSuffix)
 	out := c.ApplyAliases("zcode", []pluginapi.ModelInfo{{ID: "GLM-5.3", Name: "GLM-5.3", DisplayName: "GLM-5.3"}})
-	if len(out) != 1 || out[0].ID != "GLM-5.3-zcode" {
+	if len(out) != 1 || out[0].ID != "GLM-5.3-zc" {
 		t.Fatalf("tagged id = %+v", out)
 	}
-	if got := c.ResolveOutboundModel("zcode", "GLM-5.3-zcode"); got != "GLM-5.3" {
+	if got := c.ResolveOutboundModel("zcode", "GLM-5.3-zc"); got != "GLM-5.3" {
 		t.Fatalf("untag resolve = %q", got)
+	}
+	if got := c.ResolveOutboundModel("zcode", "GLM-5.3-zcode"); got != "GLM-5.3" {
+		t.Fatalf("legacy suffix resolve = %q", got)
 	}
 }
 
@@ -77,7 +85,7 @@ func TestChannelTagDoesNotShadowOtherModel(t *testing.T) {
 	c := newTagTestCatalog(t, ModelNameTagPrefix)
 	out := c.ApplyAliases("zcode", []pluginapi.ModelInfo{
 		{ID: "GLM-5.3", Name: "GLM-5.3"},
-		{ID: "zcode-GLM-5.3", Name: "zcode-GLM-5.3"},
+		{ID: "zc-GLM-5.3", Name: "zc-GLM-5.3"},
 	})
 	if len(out) != 2 || out[0].ID != "GLM-5.3" {
 		t.Fatalf("collision must skip tagging, got %+v", out)

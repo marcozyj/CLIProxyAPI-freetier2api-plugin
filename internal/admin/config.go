@@ -111,7 +111,10 @@ func DefaultPluginConfig() PluginConfig {
 		AutoCheckinAt: DefaultCheckinAt,
 		AutoTasks:     true,
 		PromptMode:    PromptModePassThrough,
-		ModelNameTag:  ModelNameTagOff,
+		// 默认给模型名加供应商缩写后缀：同一模型（GLM-5.3、deepseek-v4.1）
+		// 可能同时由好几家提供，裸名在客户端里根本分不清该选哪家。用户仍可
+		// 在设置页改回 off 或改成前缀。
+		ModelNameTag: ModelNameTagSuffix,
 	}
 }
 
@@ -296,7 +299,7 @@ func EffectiveModelNameTag(cfg PluginConfig, page string) string {
 		return tag
 	}
 	if cfg.ModelNameTag == "" {
-		return ModelNameTagOff
+		return ModelNameTagSuffix
 	}
 	return cfg.ModelNameTag
 }

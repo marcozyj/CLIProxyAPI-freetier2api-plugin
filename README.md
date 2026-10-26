@@ -111,7 +111,7 @@ curl http://localhost:8317/v1/messages \
 
 ### 3. 模型别名与跨供应商路由
 
-在控制台「模型」表格中点击 **「模型 ID」** 列的名称或 `✎` 图标即可设置对外模型别名。将不同供应商的模型设为同一别名（例如把多家供应商的旗舰模型统一设为 `coding-max`），宿主会自动合并并在多个供应商间负载均衡与故障转移。开启 `model_name_tag` 后对外 ID 带渠道标识，同名模型不再跨供应商合并。
+「模型 ID」列展示的就是客户端在 `/v1/models` 里看到的名字（默认带供应商缩写后缀，如 `GLM-5.3-zc`），照着页面填即可调用。点击该列的名称或 `✎` 图标可以设置对外模型别名。将不同供应商的模型设为同一别名（例如把多家供应商的旗舰模型统一设为 `coding-max`），宿主会自动合并并在多个供应商间负载均衡与故障转移。开启 `model_name_tag` 后对外 ID 带渠道标识，同名模型不再跨供应商合并。
 
 ## 配置说明
 
@@ -124,7 +124,7 @@ curl http://localhost:8317/v1/messages \
 | `auto_checkin_at` | string | `10:00` | 每日自动签到执行时间（`HH:MM`） |
 | `auto_tasks` | bool | `true` | 每日自动任务开关 |
 | `prompt_mode` | string | `passthrough` | 提示词防御模式：`passthrough`（透传）/ `custom`（替换）/ `append`（追加） |
-| `model_name_tag` | string | `off` | 模型名渠道标识：`off`（默认）/ `prefix` / `suffix`。开启后各供应商的模型对外 ID 自动带渠道前缀或后缀（如 `zcode-GLM-5.3`），同名模型可按渠道定点选择；标识按供应商统一生成、不区分账号。改动后需宿主重建模型注册表生效（重启或等凭据重载，控制台会提示「待生效」） |
+| `model_name_tag` | string | `suffix` | 模型名渠道标识：`off` / `prefix` / `suffix`（默认）。默认给每个模型的对外 ID 加上供应商缩写后缀（如 `GLM-5.3-zc`、`deepseek-v4.1-flash-tr`），同一模型被多家供应商提供时在客户端里可以直接分辨；`off` 则保持官方 ID。缩写表见 `internal/core/tag.go`（ac=AutoClaw CN、wb=WorkBuddy CN、tr=Trae CN、zc=ZCode……），未登记的供应商退回用 vendorID。标识按供应商统一生成、不区分账号；改动后需宿主重建模型注册表生效（重启或等凭据重载，控制台会提示「待生效」） |
 | `disabled_models` | string / list | 空 | 禁用模型列表（支持 `vendor:model` 或裸名，与控制台勾选合并） |
 | `extra_models` | string | 空 | 额外补充注册的模型名（逗号分隔） |
 | `state_dir` | string | `~/.freetier2api-plugin` | 状态与缓存目录（若存在 `~/.cli-proxy-api` 则默认使用其下 `freetier2api` 子目录） |

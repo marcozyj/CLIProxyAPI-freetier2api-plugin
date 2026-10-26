@@ -108,6 +108,7 @@ func (s *Service) managementRoutes(prefix string) []pluginapi.ManagementRoute {
 		{Method: "POST", Path: prefix + "/models/toggle", Description: "批量禁用/启用模型。"},
 		{Method: "POST", Path: prefix + "/models/alias", Description: "给模型设置/清除对外别名（跨供应商同名可合并路由）。"},
 		{Method: "POST", Path: prefix + "/models/refresh", Description: "从上游拉取模型清单并缓存。"},
+		{Method: "POST", Path: prefix + "/models/test", Description: "用真实账号对单个模型发一次最小对话，验证连通性。"},
 		{Method: "GET", Path: prefix + "/logs", Description: "读取插件日志（增量）。"},
 		{Method: "POST", Path: prefix + "/settings", Description: "更新插件运行期设置（自动签到、任务排程、提示词）。"},
 		{Method: "POST", Path: prefix + "/tasks/scan", Description: "扫描全部账号的待办任务。"},
@@ -194,6 +195,9 @@ func (s *Service) Handle(request []byte) ([]byte, error) {
 			return core.OKEnvelope(ErrorResponse(errRefresh))
 		}
 		return core.OKEnvelope(JSONResponse(http.StatusOK, map[string]any{"ok": true, "models": count}))
+
+	case method == http.MethodPost && matchesManagementPath(rpc.Path, id.ID, "/models/test"):
+		return core.OKEnvelope(s.modelTestHandler(rpc))
 
 	case method == http.MethodPost && matchesManagementPath(rpc.Path, id.ID, "/settings"):
 		return core.OKEnvelope(s.handleSettingsRequest(rpc))

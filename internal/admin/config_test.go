@@ -99,7 +99,7 @@ func TestNormalizeModelNameTag(t *testing.T) {
 	}
 }
 
-// TestDecodeModelNameTag 验证 YAML 键解析与生效优先级：页面覆盖 > YAML > off。
+// TestDecodeModelNameTag 验证 YAML 键解析与生效优先级：页面覆盖 > YAML > suffix。
 func TestDecodeModelNameTag(t *testing.T) {
 	cfg, err := DecodePluginConfig([]byte("model_name_tag: Prefix\n"), DefaultPluginConfig())
 	if err != nil {
@@ -114,7 +114,9 @@ func TestDecodeModelNameTag(t *testing.T) {
 	if got := EffectiveModelNameTag(cfg, " "); got != ModelNameTagPrefix {
 		t.Fatalf("yaml fallback = %q", got)
 	}
-	if got := EffectiveModelNameTag(PluginConfig{}, ""); got != ModelNameTagOff {
+	// 空配置回落到内置默认：suffix（模型 ID 默认带供应商缩写，避免不同
+	// 供应商的同名模型在宿主侧撞车）。
+	if got := EffectiveModelNameTag(PluginConfig{}, ""); got != ModelNameTagSuffix {
 		t.Fatalf("default = %q", got)
 	}
 }

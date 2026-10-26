@@ -803,13 +803,18 @@ func (c *Catalog) ApplyAliases(vendorID string, models []pluginapi.ModelInfo) []
 // taggedModelID 按当前模式给模型 ID 加渠道标识；off 或结果为空返回空串。
 //
 // 标识统一按**供应商**生成（不同账号之间不区分）：zcode 的 GLM-5.3 无论几个
-// 账号对外都是 zcode-GLM-5.3。
+// 账号对外都是 GLM-5.3-zc。标识本身用 core.VendorTag 的缩写，vendorID 在
+// workbuddycn 这类实例上太长，放进模型 ID 会挤占客户端配置的宽度。
 func (c *Catalog) taggedModelID(vendorID, modelID string) string {
+	tag := core.VendorTag(vendorID)
+	if tag == "" {
+		return ""
+	}
 	switch c.settings.ModelNameTag {
 	case ModelNameTagPrefix:
-		return vendorID + "-" + modelID
+		return tag + "-" + modelID
 	case ModelNameTagSuffix:
-		return modelID + "-" + vendorID
+		return modelID + "-" + tag
 	}
 	return ""
 }
@@ -853,15 +858,25 @@ func (c *Catalog) ResolveOutboundModel(vendorID, model string) string {
 
 // untagModelID 尝试把带渠道标识的模型 ID 还原成官方 ID，返回全部候选
 // （prefix 剥离与 suffix 剥离各一个；都不匹配返回空）。
+//
+// 同时接受缩写标识与裸 vendorID：缩写是现在的默认形态，裸 vendorID 是加缩写
+// 之前的形态，客户端可能还缓存着旧名字，两者都要能还原。
 func (c *Catalog) untagModelID(vendorID, requested string) []string {
 	vendorLower := strings.ToLower(strings.TrimSpace(vendorID))
+	tagLower := core.VendorTag(vendorID)
 	requestedLower := strings.ToLower(requested)
-	var out []string
-	if lead := vendorLower + "-"; strings.HasPrefix(requestedLower, lead) && len(requested) > len(lead) {
-		out = append(out, requested[len(lead):])
+	masks := []string{vendorLower}
+	if tagLower != "" && tagLower != vendorLower {
+		masks = append([]string{tagLower}, masks...)
 	}
-	if tail := "-" + vendorLower; strings.HasSuffix(requestedLower, tail) && len(requested) > len(tail) {
-		out = append(out, requested[:len(requested)-len(tail)])
+	var out []string
+	for _, mask := range masks {
+		if lead := mask + "-"; strings.HasPrefix(requestedLower, lead) && len(requested) > len(lead) {
+			out = append(out, requested[len(lead):])
+		}
+		if tail := "-" + mask; strings.HasSuffix(requestedLower, tail) && len(requested) > len(tail) {
+			out = append(out, requested[:len(requested)-len(tail)])
+		}
 	}
 	return out
 }

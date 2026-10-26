@@ -195,6 +195,17 @@ input.aliasinput:focus { outline: none; border-color: var(--accent); box-shadow:
 .modelidedit { color: var(--muted); font-size: 11.5px; }
 .modelid:hover .modelidedit { color: var(--accent); }
 
+/* 模型行的「测试」按钮：一句「你好」打一次真实请求。默认低调，悬停显形，
+   结果用右下角悬浮卡片给出，绝不把结果塞进表格里撑着行高。 */
+.modeltest { margin-left: 8px; padding: 1px 8px; border-radius: 999px;
+             border: 1px solid var(--border); background: var(--bg); color: var(--muted);
+             font-size: 11.5px; line-height: 1.75; cursor: pointer; white-space: nowrap; }
+.modeltest:hover { color: var(--accent); border-color: var(--accent); }
+.modeltest:disabled { cursor: progress; opacity: .65; }
+.modeltest.running { color: var(--accent); border-color: var(--accent); }
+.modeltest.ok { color: var(--ok); border-color: var(--ok); }
+.modeltest.err { color: var(--err); border-color: var(--err); }
+
 #models { overflow-x: auto; }
 #models table { min-width: 980px; }
 /* 行高略松：模型一多也不会看成一片 */
@@ -248,13 +259,32 @@ input.aliasinput:focus { outline: none; border-color: var(--accent); box-shadow:
 .dropdown-menu label:hover { background: var(--bg); }
 .dropdown-menu label.disabled { cursor: not-allowed; opacity: .7; }
 
-.banner { padding: 10px 14px; border-radius: 10px; margin-bottom: 12px; font-size: 13px;
-          display: none; transition: opacity .2s ease; border: 1px solid transparent;
-          border-left-width: 3px; backdrop-filter: blur(6px); }
-.banner.show { display: block; }
-.banner.err  { background: var(--err-soft);  border-left: 3px solid var(--err);  color: var(--err); }
-.banner.ok   { background: var(--ok-soft);   border-left: 3px solid var(--ok);   color: var(--ok); }
-.banner.warn { background: var(--warn-soft); border-left: 3px solid var(--warn); color: var(--warn); }
+/* ---- 悬浮提示卡片 ---- */
+/* 提示不再占用页面顶部的版面：定位在右下角，多条纵向堆叠，窄屏铺满底部。
+   这样「查询额度 / 一键签到 / 测试模型」这类操作的结果不会把下面的内容顶走。 */
+.toasts { position: fixed; right: 18px; bottom: 18px; z-index: 90;
+          display: flex; flex-direction: column; align-items: flex-end; gap: 10px;
+          max-width: min(440px, calc(100vw - 24px)); pointer-events: none; }
+.toast { pointer-events: auto; display: flex; align-items: flex-start; gap: 10px;
+         width: max-content; max-width: 100%; max-height: min(50vh, 420px); overflow: auto;
+         padding: 11px 12px 11px 14px; border-radius: 12px; font-size: 13px; line-height: 1.55;
+         background: var(--card); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+         box-shadow: var(--shadow-pop); opacity: 0; transform: translateY(8px);
+         transition: opacity .18s ease, transform .18s ease; }
+.toast.show { opacity: 1; transform: translateY(0); }
+.toast.hide { opacity: 0; transform: translateY(6px); }
+.toast.ok   { border-left-color: var(--ok); }
+.toast.err  { border-left-color: var(--err); }
+.toast.warn { border-left-color: var(--warn); }
+.toast-text { white-space: pre-wrap; word-break: break-word; }
+.toast-close { flex: 0 0 auto; border: 0; background: transparent; color: var(--muted);
+               font-size: 16px; line-height: 1; padding: 0 2px; cursor: pointer; }
+.toast-close:hover { color: var(--fg); }
+.toast-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+@media (max-width: 640px) {
+  .toasts { left: 12px; right: 12px; bottom: 12px; align-items: stretch; }
+  .toast { width: auto; }
+}
 .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
 .disclaimer { padding: 10px 14px; border-radius: 10px; margin-bottom: 14px; font-size: 12.5px; background: var(--warn-soft); border: 1px solid transparent; border-left: 3px solid var(--warn); color: var(--fg); line-height: 1.55; }
 
@@ -313,7 +343,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
     </div>
   </div>
 
-  <div id="banner" class="banner"></div>
+  <div id="toasts" class="toasts" aria-live="polite" aria-atomic="false"></div>
 
   <section id="view-accounts">
     <div class="card">
@@ -464,8 +494,8 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
         <label>模型名渠道标识
           <select id="setModelNameTag" style="margin-left:8px;padding:3px 6px">
             <option value="off">关闭（模型名保持原样）</option>
-            <option value="prefix">前缀（如 zcode-GLM-5.3）</option>
-            <option value="suffix">后缀（如 GLM-5.3-zcode）</option>
+            <option value="prefix">前缀（如 zc-GLM-5.3）</option>
+            <option value="suffix">后缀（默认，如 GLM-5.3-zc）</option>
           </select>
         </label>
       </div>
@@ -616,27 +646,93 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
     catch (e) { return ""; }
   }
 
-  var bannerTimer = null;
+  // ---- 悬浮提示卡片 ----
+  //
+  // 所有提示（查询额度、签到、删除确认、模型测试…）都走这里：右下角堆叠的
+  // 卡片，不再有页面顶部的横幅。卡片可以手动关闭，也可以按 kind 自动消失。
+  var TOAST_LIMIT = 4;
 
-  function banner(kind, text, duration) {
-    if (bannerTimer) { clearTimeout(bannerTimer); bannerTimer = null; }
-    var el = document.getElementById("banner");
-    if (!el) return;
-    el.className = "banner show " + kind;
-    el.textContent = text;
-    // 默认自动消失时间：ok 5秒，warn 6秒，err 8秒。若传入 0 则持续显示直到被下一次操作替换或手动清除
-    var timeout = duration !== undefined ? duration : (kind === "ok" ? 5000 : (kind === "warn" ? 6000 : 8000));
-    if (timeout > 0) {
-      bannerTimer = setTimeout(function () {
-        clearBanner();
-      }, timeout);
+  function toast(kind, text, duration) {
+    var host = document.getElementById("toasts");
+    if (!host) return null;
+    var card = el("div", null, "toast " + (kind || "ok"));
+    var body = el("div", String(text === undefined || text === null ? "" : text), "toast-text");
+    card.appendChild(body);
+    var close = document.createElement("button");
+    close.type = "button";
+    close.className = "toast-close";
+    close.textContent = "\u00d7";
+    close.setAttribute("aria-label", "关闭");
+    card.appendChild(close);
+
+    host.appendChild(card);
+    // 先挂载再上动画类，否则 opacity/transform 的初始态会被浏览器合并掉。
+    requestAnimationFrame(function () { card.classList.add("show"); });
+
+    while (host.children.length > TOAST_LIMIT) {
+      dropToast(host.children[0]);
     }
+
+    var timeout = duration !== undefined ? duration : (kind === "ok" ? 5000 : (kind === "warn" ? 6000 : 8000));
+    var timer = timeout > 0 ? setTimeout(function () { dropToast(card); }, timeout) : null;
+    close.addEventListener("click", function () {
+      if (timer) { clearTimeout(timer); timer = null; }
+      dropToast(card);
+    });
+    return card;
+  }
+
+  function dropToast(card) {
+    if (!card || !card.parentNode) return;
+    card.classList.remove("show");
+    card.classList.add("hide");
+    setTimeout(function () {
+      if (card.parentNode) card.parentNode.removeChild(card);
+    }, 200);
+  }
+
+  // banner 保留原名：几十处调用点不用改，行为统一换成悬浮卡片。
+  function banner(kind, text, duration) {
+    return toast(kind, text, duration);
   }
 
   function clearBanner() {
-    if (bannerTimer) { clearTimeout(bannerTimer); bannerTimer = null; }
-    var el = document.getElementById("banner");
-    if (el) el.className = "banner";
+    var host = document.getElementById("toasts");
+    if (!host) return;
+    Array.prototype.slice.call(host.children).forEach(dropToast);
+  }
+
+  // uiConfirm 用悬浮卡片替代 window.confirm：
+  // 卡片里给出「取消 / 确认」两个按钮，返回 Promise<boolean>。
+  function uiConfirm(text, confirmText) {
+    return new Promise(function (resolve) {
+      var host = document.getElementById("toasts");
+      if (!host) { resolve(window.confirm(text)); return; }
+      var card = el("div", null, "toast warn");
+      var box = el("div");
+      box.appendChild(el("div", String(text), "toast-text"));
+      var actions = el("div", null, "toast-actions");
+      var cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "act";
+      cancel.textContent = "取消";
+      var ok = document.createElement("button");
+      ok.type = "button";
+      ok.className = "act primary";
+      ok.textContent = confirmText || "确认";
+      actions.appendChild(cancel);
+      actions.appendChild(ok);
+      box.appendChild(actions);
+      card.appendChild(box);
+      host.appendChild(card);
+      requestAnimationFrame(function () { card.classList.add("show"); });
+      function finish(value) {
+        dropToast(card);
+        resolve(value);
+      }
+      cancel.addEventListener("click", function () { finish(false); });
+      ok.addEventListener("click", function () { finish(true); });
+    });
   }
 
   // haltOnAuthFailure 判定密钥失效：立即停止一切自动请求并展开手填框。
@@ -981,7 +1077,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
       var promptSel = document.getElementById("setPromptMode");
       if (promptSel) promptSel.value = settings.prompt_mode || "passthrough";
       var tagSel = document.getElementById("setModelNameTag");
-      if (tagSel) tagSel.value = settings.model_name_tag || "off";
+      if (tagSel) tagSel.value = settings.model_name_tag || "suffix";
       renderTaskSchedules(settings);
       var scheduler = status.scheduler || {};
       var labels = {};
@@ -1591,11 +1687,58 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
   //
   // 编辑框预填「当前生效 ID」（已设别名取别名，否则取官方 ID），省去重敲全名；
   // 光标置于开头，便于直接在原名前补平台前缀。预填值原样提交不算改动。
+  // runModelTest 用真实账号给单个模型发一句「你好」。
+  //
+  // 结果不落在表格里，而是右下角悬浮卡片：失败原因往往很长（上游排队、
+  // 内容策略、鉴权过期），塞进单元格会把整行撑爆。按钮本身只负责
+  // 「进行中 → 绿/红」这一圈状态，方便用户一眼扫出哪几个模型不通。
+  function runModelTest(model, button) {
+    if (!button || button.disabled) return;
+    var bareID = String(model.id || "");
+    var exposed = String(model.public_id || "") || String(model.alias || "") || bareID;
+    var label = vendorLabel(model.vendor_id, model.realm);
+    var started = Date.now();
+    button.disabled = true;
+    button.classList.remove("ok", "err");
+    button.classList.add("running");
+    button.textContent = "测试中…";
+
+    function settle(kind, text) {
+      button.disabled = false;
+      button.classList.remove("running");
+      button.classList.add(kind);
+      button.textContent = kind === "ok" ? "✓ 通过" : "✗ 失败";
+      var seconds = ((Date.now() - started) / 1000).toFixed(1);
+      toast(kind, "【" + label + " · " + exposed + "】" + seconds + "s\n" + text);
+      // 按钮状态只保留这一次结果，下一次 hover 时提示信息仍然可读；
+      // 3 秒后回到「测试」，避免表格里长期挂着绿/红点造成误解。
+      setTimeout(function () {
+        button.classList.remove("ok", "err");
+        button.textContent = "测试";
+      }, 3000);
+    }
+
+    api("POST", "/models/test", { vendor_id: model.vendor_id, model: bareID }).then(function (data) {
+      if (!data) { settle("err", "请求被中断（管理身份可能已失效）"); return; }
+      var resolved = data.resolved || bareID;
+      if (data.ok) {
+        settle("ok", resolved + "\n" + (data.reply || "（无内容）"));
+      } else {
+        settle("err", resolved + "\n" + (data.message || data.error || "未知错误"));
+      }
+    }).catch(function (err) {
+      settle("err", err.message);
+    });
+  }
+
   function modelIDCell(model) {
     var cell = el("td");
     var bareID = String(model.id || "");
     var saved = model.alias || "";
-    var initial = saved || bareID;
+    // exposed 是客户端真正看到的 ID（官方 ID + 供应商后缀，或手动别名）。
+    // 控制台展示它而不是 bareID，用户照着页面填就能直接调通。
+    var exposed = String(model.public_id || "") || bareID;
+    var initial = saved || exposed;
     var key = String(model.scope_id || model.id);
 
     var wrap = el("span", null, "modelid");
@@ -1609,11 +1752,21 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
     cell.appendChild(wrap);
     syncName();
 
+    var testButton = el("button", "测试", "modeltest");
+    testButton.type = "button";
+    testButton.title = "向该模型发一句「你好」，用真实账号验证连通性";
+    testButton.setAttribute("aria-label", "测试模型 " + (saved || exposed));
+    testButton.addEventListener("click", function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      runModelTest(model, testButton);
+    });
+    cell.appendChild(testButton);
+
     function syncName() {
-      nameSpan.textContent = saved || bareID;
-      wrap.setAttribute("title", saved
-        ? "点击编辑对外模型 ID（留空恢复官方 ID：" + bareID + "）"
-        : "点击编辑对外模型 ID（留空即用官方 ID：" + bareID + "）");
+      nameSpan.textContent = saved || exposed;
+      wrap.setAttribute("title", "对外 ID：" + (saved || exposed) + "（官方 ID：" + bareID + "）" +
+        (saved ? "；点击编辑，留空恢复默认" : "；点击编辑"));
     }
 
     function beginEdit() {
@@ -1638,6 +1791,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
           if (!data) { restore(focusBack); return; }
           saved = next;
           model.alias = next;
+          model.public_id = next || exposed;
           // 别名的出站翻译已即时生效；这里再同步一次，让 /v1/models 的 ID 跟着变。
           syncModelConfig();
           restore(focusBack);
@@ -2800,7 +2954,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
       auto_checkin_at: document.getElementById("setCheckinAt").value,
       auto_tasks: document.getElementById("setAutoTasks").checked,
       prompt_mode: promptSel ? promptSel.value : "passthrough",
-      model_name_tag: (document.getElementById("setModelNameTag") || {}).value || "off",
+      model_name_tag: (document.getElementById("setModelNameTag") || {}).value || "suffix",
       task_schedules: {}
     };
     document.querySelectorAll("#taskSchedule input[data-task-kind]").forEach(function (input) {

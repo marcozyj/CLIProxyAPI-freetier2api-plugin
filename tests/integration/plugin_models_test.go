@@ -21,7 +21,8 @@ import (
 // authSupportsRouteModel → ClientSupportsModel）——这是双域隔离的落点。
 func TestModelsForAuthIsolatesRealms(t *testing.T) {
 	host := installFakeHost(t)
-	setupTestPlugin(t)
+	// 本用例验证的是跨区域隔离，不是模型名标识；关掉标识才能按官方 ID 断言。
+	setupTestPlugin(t, func(cfg *app.Config) { cfg.ModelNameTag = "off" })
 
 	host.addAccount("1", "cn-account", sampleCredentialJSON("cn", "cn1"))
 	host.addAccount("2", "global-account", sampleCredentialJSON("global", "g1"))
@@ -103,7 +104,8 @@ func TestModelsForAuthIsolatesRealms(t *testing.T) {
 // TestStaticModelsBareAndMerged 验证静态目录为裸模型名且同名自动去重合并。
 func TestStaticModelsBareAndMerged(t *testing.T) {
 	host := installFakeHost(t)
-	setupTestPlugin(t)
+	// 同名模型跨供应商合并是「标识关闭」时的行为，这里显式关掉标识。
+	setupTestPlugin(t, func(cfg *app.Config) { cfg.ModelNameTag = "off" })
 	host.addAccount("1", "workbuddycn-test.json", sampleCredentialJSON("cn", "test"))
 	host.setUpstream(func(method, url, body string) fakeUpstreamResponse {
 		if strings.Contains(url, "/v3/config") {
@@ -394,7 +396,7 @@ func TestModelAliasScopedAndRouting(t *testing.T) {
 // TestModelAliasSwapRegistersAliasID 验证别名被当作模型的对外 ID 注册。
 func TestModelAliasSwapRegistersAliasID(t *testing.T) {
 	installFakeHost(t)
-	setupTestPlugin(t)
+	setupTestPlugin(t, func(cfg *app.Config) { cfg.ModelNameTag = "off" })
 
 	in := []pluginapi.ModelInfo{
 		{ID: "qwen3.8-max", Name: "Qwen3.8-Max", DisplayName: "Qwen3.8-Max"},

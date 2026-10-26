@@ -17,7 +17,10 @@ import (
 // 刻意自定义而不直接回传 pluginapi.ModelInfo：后者没有 json tag，
 // 字段名会变成 Go 字段名，页面按小写键读会全部拿到 undefined。
 type consoleModel struct {
-	ID              string   `json:"id"`
+	ID string `json:"id"`
+	// PublicID 是客户端在 /v1/models 里看到的模型 ID（官方 ID + 供应商后缀 /
+	// 手动别名）。控制台展示它，用户照着页面填就不会 404。
+	PublicID        string   `json:"public_id,omitempty"`
 	ScopeID         string   `json:"scope_id"`
 	VendorID        string   `json:"vendor_id"`
 	VendorName      string   `json:"vendor_name"`
@@ -117,6 +120,18 @@ func (s *Service) consoleModelsForVendor(manager *Catalog, vendor core.Vendor) [
 	for index := range out {
 		if out[index].Credits == "" {
 			out[index].Credits = manager.CreditsFor(vendor.ID(), out[index].ID)
+		}
+	}
+	// 对外模型 ID 必须和 /v1/models 完全一致：用户在客户端里看到的、能调通的
+	// 名字，就是这里展示的名字。复用同一套路由规则（手动别名 > 标识 > 官方 ID），
+	// 不给控制台单独实现一份，避免两边漂移。
+	if len(out) > 0 {
+		probe := make([]pluginapi.ModelInfo, len(out))
+		for index := range out {
+			probe[index] = pluginapi.ModelInfo{ID: out[index].ID}
+		}
+		for index, info := range manager.ApplyAliases(vendor.ID(), probe) {
+			out[index].PublicID = info.ID
 		}
 	}
 	return out

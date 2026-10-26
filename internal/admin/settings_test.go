@@ -75,8 +75,8 @@ func TestSettingsViewReportsEffectiveModelNameTag(t *testing.T) {
 	deps := newStubDeps(t)
 	service := newServiceWithDeps(t, deps)
 
-	if got := settingsText(t, service, ModelNameTagKey); got != ModelNameTagOff {
-		t.Fatalf("默认标识 = %q, want off", got)
+	if got := settingsText(t, service, ModelNameTagKey); got != ModelNameTagSuffix {
+		t.Fatalf("默认标识 = %q, want suffix", got)
 	}
 
 	deps.store.Mutate(func(current *state.State) { current.ModelNameTag = ModelNameTagPrefix })
