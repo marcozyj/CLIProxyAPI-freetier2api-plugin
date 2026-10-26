@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"freetier2api-plugin/cpasdk/pluginapi"
 	"freetier2api-plugin/cpasdk/pluginabi"
+	"freetier2api-plugin/cpasdk/pluginapi"
 	"freetier2api-plugin/internal/core"
 	"freetier2api-plugin/internal/hostbridge"
 )
@@ -14,13 +14,13 @@ import (
 // TestExtractChatReplyShapes 验证结果展示能读懂上游的几种常见响应形状。
 func TestExtractChatReplyShapes(t *testing.T) {
 	cases := map[string]string{
-		"字符串 content":   `{"choices":[{"message":{"role":"assistant","content":"你好！"}}]}`,
-		"分段 content":    `{"choices":[{"message":{"content":[{"type":"text","text":"你"},{"type":"text","text":"好"}]}}]}`,
-		"纯文本补全":        `{"choices":[{"text":"你好"}]}`,
-		"只有推理内容":       `{"choices":[{"message":{"reasoning_content":"先想一想"}}]}`,
-		"错误塞进 200 响应":  `{"error":{"message":"model is busy"}}`,
-		"空 choices":     `{"choices":[]}`,
-		"非 JSON":        `not-json`,
+		"字符串 content": `{"choices":[{"message":{"role":"assistant","content":"你好！"}}]}`,
+		"分段 content":  `{"choices":[{"message":{"content":[{"type":"text","text":"你"},{"type":"text","text":"好"}]}}]}`,
+		"纯文本补全":       `{"choices":[{"text":"你好"}]}`,
+		"只有推理内容":      `{"choices":[{"message":{"reasoning_content":"先想一想"}}]}`,
+		"错误塞进 200 响应": `{"error":{"message":"model is busy"}}`,
+		"空 choices":   `{"choices":[]}`,
+		"非 JSON":      `not-json`,
 	}
 	for name, payload := range cases {
 		got := extractChatReply(&pluginapi.ExecutorResponse{Payload: []byte(payload)})
