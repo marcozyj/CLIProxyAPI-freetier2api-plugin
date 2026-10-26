@@ -25,7 +25,7 @@ jobs:
         include:
           - { os: linux, arch: amd64, runner: ubuntu-latest }
           - { os: linux, arch: arm64, runner: ubuntu-latest }
-          - { os: darwin, arch: amd64, runner: macos-13 }
+          - { os: darwin, arch: amd64, runner: macos-14 }
           - { os: darwin, arch: arm64, runner: macos-14 }
           - { os: windows, arch: amd64, runner: windows-latest }
     steps:
@@ -61,6 +61,16 @@ jobs:
           esac
           if [ "$GOOS" = "linux" ] && [ "$GOARCH" = "arm64" ]; then
             export CC=aarch64-linux-gnu-gcc
+          fi
+          if [ "$GOOS" = "darwin" ] && [ "$GOARCH" = "amd64" ]; then
+            # macos-13 runner 已下线，只能让 arm64 机器交叉编译：
+            # 用一个包一层的 CC，确保编译与链接都带 -arch x86_64。
+            cat > cc-x86_64 <<'WRAP'
+          #!/bin/sh
+          exec clang -arch x86_64 "$@"
+          WRAP
+            chmod +x cc-x86_64
+            export CC="$PWD/cc-x86_64"
           fi
           mkdir -p dist
           go build -buildmode=c-shared -ldflags="-s -w" -o "dist/freetier2api.$ext" .
