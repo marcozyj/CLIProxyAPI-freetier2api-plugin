@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -318,6 +319,10 @@ func fetchCatalog(ctx context.Context, cred *Credential, cfg Config) (catalogEnt
 	}
 
 	models, metadata := catalogEntries(parsed.ConfigInfoList)
+	if sample := rateShapeSample(parsed.ConfigInfoList, metadata); sample != "" {
+		// 只打键名，不打值：够定位「字段搬家」，又不会把账号信息带进日志。
+		logger.Debug("trae catalog: %s 倍率缺失探针 %s", cfg.VendorID, sample)
+	}
 	entry := catalogEntry{models: models, metadata: metadata, fetchedAt: time.Now()}
 	if len(entry.models) == 0 {
 		// 上游偶尔会整体降级（例如构建号低于门控时只回旧清单）。把条目摘要
@@ -336,7 +341,7 @@ func fetchCatalog(ctx context.Context, cred *Credential, cfg Config) (catalogEnt
 // 键名有 snake_case / camelCase 两态，逐层按键名不区分大小写取。enable=false
 // 表示该模型不参与计费（等价于「没有倍率」）；rate=0 是合法的限免档，保留。
 func consumptionRate(raw json.RawMessage) string {
-	contact, okContact := decodeObject(raw)
+	contact, okContact := decodePayload(raw)
 	if !okContact {
 		return ""
 	}
@@ -364,6 +369,117 @@ func consumptionRate(raw json.RawMessage) string {
 		return number.String()
 	}
 	return ""
+}
+
+// rateShapeSample 在「有模型但没解析出倍率」时汇总一份键名样本。
+//
+// 上游 display_contact_config 的结构换过代：光看控制台的「—」分不清是
+// 「字段搬家」还是「这个模型本来就不计费」。这里只输出键路径（不含值），
+// 一次实况运行就能看出该往哪一层取。
+func rateShapeSample(items []catalogItem, metadata map[string]Model) string {
+	missing, total := 0, 0
+	for _, model := range metadata {
+		total++
+		if model.Credits == "" {
+			missing++
+		}
+	}
+	if missing == 0 || total == 0 {
+		return ""
+	}
+	parts := make([]string, 0, 3)
+	noContact := 0
+	for _, item := range items {
+		if len(parts) >= 3 {
+			break
+		}
+		if len(item.DisplayContactConfig) == 0 {
+			noContact++
+			continue
+		}
+		parts = append(parts, item.ConfigName+"="+keyShape(item.DisplayContactConfig, 2))
+	}
+	if len(parts) == 0 {
+		return fmt.Sprintf("missing=%d/%d 全部条目都没有 display_contact_config", missing, total)
+	}
+	if noContact > 0 {
+		parts = append(parts, fmt.Sprintf("其余 %d 条无该字段", noContact))
+	}
+	return fmt.Sprintf("missing=%d/%d %s", missing, total, strings.Join(parts, "; "))
+}
+
+// keyShape 输出一层键名；depth>1 时对嵌套对象继续展开，最多 8 个键。
+func keyShape(raw json.RawMessage, depth int) string {
+	doc, okDoc := decodePayload(raw)
+	if !okDoc {
+		return "<" + rawKind(raw) + ">"
+	}
+	keys := make([]string, 0, len(doc))
+	for key := range doc {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if len(keys) > 8 {
+		keys = append(keys[:8], "…")
+	}
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if key == "…" {
+			out = append(out, key)
+			continue
+		}
+		if depth > 1 {
+			if _, nested := decodeObject(doc[key]); nested {
+				out = append(out, key+"{"+keyShape(doc[key], depth-1)+"}")
+				continue
+			}
+		}
+		out = append(out, key)
+	}
+	return "{" + strings.Join(out, ",") + "}"
+}
+
+// rawKind 给探针用：只报 JSON 类型，不报内容。
+func rawKind(raw json.RawMessage) string {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return "空"
+	}
+	switch trimmed[0] {
+	case '{':
+		return "对象"
+	case '[':
+		return "数组"
+	case '"':
+		return "字符串"
+	case 't', 'f':
+		return "布尔"
+	case 'n':
+		return "null"
+	default:
+		return "数字"
+	}
+}
+
+// decodePayload 解开「对象或 JSON 字符串里的对象」。
+//
+// 实况抓包（2026-10-27，Trae CN）：display_contact_config 是一个**字符串**，
+// 里面才是 JSON 对象——直接按对象解会全部落空，控制台于是整列「—」。
+// 两代响应都见过（对象 / 字符串），这里统一兜住。
+func decodePayload(raw json.RawMessage) (map[string]json.RawMessage, bool) {
+	doc, okDoc := decodeObject(raw)
+	if okDoc {
+		return doc, true
+	}
+	var text string
+	if errText := json.Unmarshal(raw, &text); errText != nil {
+		return nil, false
+	}
+	trimmed := strings.TrimSpace(text)
+	if !strings.HasPrefix(trimmed, "{") {
+		return nil, false
+	}
+	return decodeObject(json.RawMessage(trimmed))
 }
 
 // decodeObject 把 JSON 解成键值对表；空值/非对象返回 false。

@@ -21,6 +21,10 @@ func TestConsumptionRateParsesVariants(t *testing.T) {
 		{"zero is legal", `{"consumption_rate":{"data":{"rate":0}}}`, "0"},
 		{"disabled at rate", `{"consumption_rate":{"enable":false,"data":{"rate":0.9}}}`, ""},
 		{"disabled at data", `{"consumption_rate":{"data":{"enable":false,"rate":0.9}}}`, ""},
+		// 实况（2026-10-27）：整个 display_contact_config 是一个 JSON 字符串，
+		// 里面才是对象。不兜这一层，39 个模型会全部解析失败。
+		{"string-wrapped", `"{\"consumption_rate\":{\"enable\":true,\"data\":{\"rate\":\"0.83\"}}}"`, "0.83"},
+		{"string-wrapped zero", `"{\"consumption_rate\":{\"data\":{\"rate\":0}}}"`, "0"},
 		{"missing", `{}`, ""},
 		{"null", ``, ""},
 	}

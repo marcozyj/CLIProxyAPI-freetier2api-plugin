@@ -7,6 +7,7 @@ package live
 // 只打印截断后的响应，不打印凭证内容。
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 
 	"freetier2api-plugin/cpasdk/pluginabi"
 	"freetier2api-plugin/internal/hostbridge"
+	"freetier2api-plugin/internal/logger"
 	"freetier2api-plugin/internal/vendors/trae"
 )
 
@@ -31,9 +33,9 @@ import (
 func configureTraeHost(t *testing.T) {
 	t.Helper()
 	var (
-		mu     sync.Mutex
-		bodies = map[string][]byte{}
-		nextID int
+		mu      sync.Mutex
+		streams = map[string]*probeStream{}
+		nextID  int
 	)
 	hostbridge.Configure(func(callbackID, method string, payload any) (json.RawMessage, error) {
 		raw, errMarshal := json.Marshal(payload)
@@ -59,29 +61,46 @@ func configureTraeHost(t *testing.T) {
 			}
 			return json.Marshal(map[string]any{"StatusCode": status, "Headers": header, "Body": body})
 		case pluginabi.MethodHostHTTPDoStream:
-			status, header, body, errDo := doUpstream(req.Method, req.URL, req.Headers, req.Body)
+			// 流式请求必须**边读边投**：上游是 SSE，很多端点在客户端读完之前
+			// 不会关闭连接，整体 ReadAll 会一直挂住（实测 Qoder 国际版就是）。
+			httpReq, errNew := http.NewRequest(req.Method, req.URL, bytes.NewReader(req.Body))
+			if errNew != nil {
+				return nil, errNew
+			}
+			for key, values := range req.Headers {
+				for _, value := range values {
+					httpReq.Header.Add(key, value)
+				}
+			}
+			resp, errDo := (&http.Client{Timeout: 180 * time.Second}).Do(httpReq)
 			if errDo != nil {
 				return nil, errDo
 			}
 			mu.Lock()
 			nextID++
 			streamID := fmt.Sprintf("probe-%d", nextID)
-			bodies[streamID] = body
+			stream := &probeStream{}
+			streams[streamID] = stream
 			mu.Unlock()
-			return json.Marshal(map[string]any{"status_code": status, "headers": header, "stream_id": streamID})
+			go stream.pump(resp.Body)
+			return json.Marshal(map[string]any{"status_code": resp.StatusCode, "headers": resp.Header, "stream_id": streamID})
 		case pluginabi.MethodHostHTTPStreamRead:
-			// 宿主契约：done=true 时同一响应里的 payload 会被丢弃，
-			// 因此先投数据（done=false），下一次空读才置 done=true。
 			mu.Lock()
-			body, okBody := bodies[req.StreamID]
-			if okBody {
-				delete(bodies, req.StreamID)
-			}
+			stream := streams[req.StreamID]
 			mu.Unlock()
-			if okBody {
-				return json.Marshal(map[string]any{"payload": body, "done": false})
+			var payload []byte
+			done := true
+			if stream != nil {
+				payload, done = stream.pop()
 			}
-			return json.Marshal(map[string]any{"done": true})
+			response := map[string]any{"done": done}
+			if len(payload) > 0 {
+				response["payload"] = payload
+			}
+			if stream != nil && stream.err != nil && done {
+				response["error"] = stream.err.Error()
+			}
+			return json.Marshal(response)
 		case pluginabi.MethodHostHTTPStreamClose:
 			return json.Marshal(map[string]any{})
 		default:
@@ -89,6 +108,47 @@ func configureTraeHost(t *testing.T) {
 		}
 	})
 	t.Cleanup(func() { hostbridge.Configure(nil) })
+}
+
+// probeStream 是探针侧的上游 SSE 缓冲：读协程写入、宿主回调取走。
+type probeStream struct {
+	mu   sync.Mutex
+	buf  []byte
+	done bool
+	err  error
+}
+
+func (s *probeStream) pump(body io.ReadCloser) {
+	defer func() { _ = body.Close() }()
+	chunk := make([]byte, 32*1024)
+	for {
+		n, errRead := body.Read(chunk)
+		if n > 0 {
+			s.mu.Lock()
+			s.buf = append(s.buf, chunk[:n]...)
+			s.mu.Unlock()
+		}
+		if errRead != nil {
+			s.mu.Lock()
+			if errRead != io.EOF {
+				s.err = errRead
+			}
+			s.done = true
+			s.mu.Unlock()
+			return
+		}
+	}
+}
+
+func (s *probeStream) pop() ([]byte, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.buf) == 0 {
+		return nil, s.done
+	}
+	out := append([]byte(nil), s.buf...)
+	s.buf = nil
+	return out, false
 }
 
 func doUpstream(method, url string, headers map[string][]string, body []byte) (int, http.Header, []byte, error) {
@@ -250,4 +310,34 @@ func TestTraeLiveModels(t *testing.T) {
 		names = append(names, model.ID)
 	}
 	t.Logf("目录模型数=%d: %s", len(models), truncateProbe(strings.Join(names, ","), 800))
+}
+
+// TestTraeLiveCatalogRates 打印目录里的倍率覆盖情况。
+//
+// 没有倍率的条目会触发 models.go 的「键名探针」（只打键名、不打值），
+// 用于确认上游是不是把 display_contact_config 搬了家。
+func TestTraeLiveCatalogRates(t *testing.T) {
+	cred, cfg := traeLiveCredential(t)
+	logger.SetLevel("debug")
+
+	models, errModels := trae.FetchModels(context.Background(), cred, cfg)
+	if errModels != nil {
+		t.Fatalf("FetchModels: %v", errModels)
+	}
+	missing := 0
+	for _, model := range models {
+		if model.Credits == "" {
+			missing++
+		}
+	}
+	t.Logf("目录: %d 个模型，%d 个无倍率", len(models), missing)
+	shown := 0
+	for _, model := range models {
+		if shown >= 5 {
+			break
+		}
+		shown++
+		t.Logf("样例: id=%s credits=%q context=%d output=%d tools=%v",
+			model.ID, model.Credits, model.ContextWindow, model.MaxTokens, model.SupportsTools)
+	}
 }
