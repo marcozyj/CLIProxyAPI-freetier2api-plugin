@@ -3,7 +3,8 @@ name: release
 # 打 v* 标签时构建五个平台的 c-shared 动态库并发布到 Release。
 #
 # 资产命名必须与插件商店的匹配规则一致：
-#   freetier2api_<version>_<os>_<arch>.zip   内含 freetier2api.{so,dylib,dll}
+#   freetier2api-fork_<version>_<os>_<arch>.zip   内含 freetier2api.{so,dylib,dll}
+#   （资产名必须用插件 ID 前缀：宿主按 <id>_<version>_<os>_<arch>.zip 找包）
 #   checksums.txt                            sha256 汇总
 # 名称不一致 = 商店里点安装后静默失败，所以这里把命名写死。
 
@@ -83,7 +84,7 @@ jobs:
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
           cd dist
-          zip -q "freetier2api_${version}_${{ matrix.os }}_${{ matrix.arch }}.zip" freetier2api.*
+          zip -q "freetier2api-fork_${version}_${{ matrix.os }}_${{ matrix.arch }}.zip" freetier2api.*
           ls -l
 
       - name: Package (windows)
@@ -91,11 +92,11 @@ jobs:
         shell: pwsh
         run: |
           $version = $env:GITHUB_REF_NAME -replace '^v',''
-          Compress-Archive -Path dist\freetier2api.dll -DestinationPath "dist\freetier2api_${version}_windows_${{ matrix.arch }}.zip"
+          Compress-Archive -Path dist\freetier2api.dll -DestinationPath "dist\freetier2api-fork_${version}_windows_${{ matrix.arch }}.zip"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: freetier2api-${{ matrix.os }}-${{ matrix.arch }}
+          name: freetier2api-fork-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/*.zip
           if-no-files-found: error
 
