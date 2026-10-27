@@ -125,12 +125,15 @@ jobs:
         run: |
           set -uo pipefail
           tag="${GITHUB_REF_NAME}"
-          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null |
+          # 首次发布时 release 还不存在，gh release view 会非零退出，pipefail 下
+          # 整个步骤会失败；先取成变量并兜住退出码。
+          names="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null || true)"
           while read -r name; do
+            [ -z "$name" ] && continue
             [ "$name" = "checksums.txt" ] && continue
             case "$name" in freetier2api-fork_*) continue ;; esac
             gh release delete-asset "$tag" "$name" --repo "$GITHUB_REPOSITORY" -y || true
-          done
+          done <<< "$names"
 
       - uses: softprops/action-gh-release@v2
         with:
