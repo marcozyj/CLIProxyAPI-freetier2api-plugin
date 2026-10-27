@@ -9,7 +9,7 @@
       "repository": "https://github.com/marcozyj/CLIProxyAPI-freetier2api-plugin",
       "homepage": "https://github.com/marcozyj/CLIProxyAPI-freetier2api-plugin",
       "license": "MIT",
-      "version": "0.1.23",
+      "version": "0.1.24",
       "tags": [
         "Provider",
         "WorkBuddy",
@@ -27,7 +27,8 @@
         "Quota",
         "Management",
         "Tasks"
-      ]
+      ],
+      "release_tag": "v0.1.24"
     }
   ]
 }

@@ -31,6 +31,6 @@ case "${GOOS:-linux}" in
   darwin) ext="dylib" ;;
 esac
 
-"$GODOCKER" build -buildmode=c-shared -ldflags="$LDFLAGS" -o "dist/freetier2api.$ext" .
+"$GODOCKER" build -buildmode=c-shared -ldflags="$LDFLAGS" -o "dist/freetier2api-fork.$ext" .
 
-echo "Built dist/freetier2api.$ext"
+echo "Built dist/freetier2api-fork.$ext"

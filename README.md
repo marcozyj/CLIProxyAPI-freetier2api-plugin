@@ -58,7 +58,7 @@
 
 ### 方式二：手动安装 Release 动态库
 
-从 [Releases](https://github.com/marcozyj/CLIProxyAPI-freetier2api-plugin/releases) 下载对应平台的归档包，解压后将动态库（`freetier2api.so` / `freetier2api.dylib` / `freetier2api.dll`）放入 CPA 插件目录，并在 `config.yaml` 中启用：
+从 [Releases](https://github.com/marcozyj/CLIProxyAPI-freetier2api-plugin/releases) 下载对应平台的归档包，解压后将动态库（`freetier2api-fork.so` / `freetier2api-fork.dylib` / `freetier2api-fork.dll`）放入 CPA 插件目录。文件名必须与插件 ID 一致，宿主据此校验归档内容，并在 `config.yaml` 中启用：
 
 ```yaml
 plugins:
@@ -80,7 +80,7 @@ cd CLIProxyAPI-freetier2api-plugin
 ./scripts/build.sh
 ```
 
-编译产物输出至 `dist/freetier2api.<so|dylib|dll>`。
+编译产物输出至 `dist/freetier2api-fork.<so|dylib|dll>`（文件名需与插件 ID 一致，插件商店据此校验）。
 
 ## 使用方法
 

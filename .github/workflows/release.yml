@@ -3,7 +3,8 @@ name: release
 # 打 v* 标签时构建五个平台的 c-shared 动态库并发布到 Release。
 #
 # 资产命名必须与插件商店的匹配规则一致：
-#   freetier2api-fork_<version>_<os>_<arch>.zip   内含 freetier2api.{so,dylib,dll}
+#   freetier2api-fork_<version>_<os>_<arch>.zip   内含 freetier2api-fork.{so,dylib,dll}
+#   库文件名必须等于插件 ID：宿主解压后按 <id>.so / <id>-v<version>.so 校验
 #   （资产名必须用插件 ID 前缀：宿主按 <id>_<version>_<os>_<arch>.zip 找包）
 #   checksums.txt                            sha256 汇总
 # 名称不一致 = 商店里点安装后静默失败，所以这里把命名写死。
@@ -74,7 +75,7 @@ jobs:
             export CC="$PWD/cc-x86_64"
           fi
           mkdir -p dist
-          go build -buildmode=c-shared -ldflags="-s -w" -o "dist/freetier2api.$ext" .
+          go build -buildmode=c-shared -ldflags="-s -w" -o "dist/freetier2api-fork.$ext" .
           ls -l dist
 
       - name: Package (unix)
@@ -84,7 +85,7 @@ jobs:
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
           cd dist
-          zip -q "freetier2api-fork_${version}_${{ matrix.os }}_${{ matrix.arch }}.zip" freetier2api.*
+          zip -q "freetier2api-fork_${version}_${{ matrix.os }}_${{ matrix.arch }}.zip" freetier2api-fork.*
           ls -l
 
       - name: Package (windows)
@@ -92,7 +93,7 @@ jobs:
         shell: pwsh
         run: |
           $version = $env:GITHUB_REF_NAME -replace '^v',''
-          Compress-Archive -Path dist\freetier2api.dll -DestinationPath "dist\freetier2api-fork_${version}_windows_${{ matrix.arch }}.zip"
+          Compress-Archive -Path dist\freetier2api-fork.dll -DestinationPath "dist\freetier2api-fork_${version}_windows_${{ matrix.arch }}.zip"
 
       - uses: actions/upload-artifact@v4
         with:
