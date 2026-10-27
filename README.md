@@ -48,19 +48,24 @@
 
 本插件已收录至 CLIProxyAPI 官方插件源：
 
+> **这是社区 fork。** 插件 ID 为 `freetier2api-fork`，与上游 `freetier2api` 在商店里是两个独立条目；
+> 两者共用同一个 provider 键（`freetier`）和同一份供应商清单，**请勿同时启用**，升级时先停用/卸载另一个。
+> 因为宿主用插件 ID 作为配置键，从上游版本迁移过来时要把 `config.yaml` 里的
+> `plugins.configs.freetier2api` 重命名为 `plugins.configs.freetier2api-fork`（`state_dir` 下的账号数据不受影响）。
+
 1. 打开 CLIProxyAPI 管理面板 → **插件商店**。
 2. 搜索 **FreeTier 2API** 并点击一键安装。
 
 ### 方式二：手动安装 Release 动态库
 
-从 [Releases](https://github.com/jiandanc/CLIProxyAPI-freetier2api-plugin/releases) 下载对应平台的归档包，解压后将动态库（`freetier2api.so` / `freetier2api.dylib` / `freetier2api.dll`）放入 CPA 插件目录，并在 `config.yaml` 中启用：
+从 [Releases](https://github.com/marcozyj/CLIProxyAPI-freetier2api-plugin/releases) 下载对应平台的归档包，解压后将动态库（`freetier2api.so` / `freetier2api.dylib` / `freetier2api.dll`）放入 CPA 插件目录，并在 `config.yaml` 中启用：
 
 ```yaml
 plugins:
   enabled: true
   dir: "/path/to/cpa/plugins"
   configs:
-    freetier2api:
+    freetier2api-fork:
       enabled: true
       enabled_realms: "cn,global"
 ```
@@ -70,7 +75,7 @@ plugins:
 需 Go 1.22+ 与 C 编译器（启用 `CGO_ENABLED=1`），或直接使用仓库内置的 Docker 构建脚本（基于 `golang:1.24` Debian glibc 镜像）：
 
 ```bash
-git clone https://github.com/jiandanc/CLIProxyAPI-freetier2api-plugin.git
+git clone https://github.com/marcozyj/CLIProxyAPI-freetier2api-plugin.git
 cd CLIProxyAPI-freetier2api-plugin
 ./scripts/build.sh
 ```
@@ -84,7 +89,7 @@ cd CLIProxyAPI-freetier2api-plugin
 启动 CLIProxyAPI 后，访问内嵌控制台页面：
 
 ```text
-http://<CPA地址>:8317/v0/resource/plugins/freetier2api/console
+http://<CPA地址>:8317/v0/resource/plugins/freetier2api-fork/console
 ```
 
 - 点击 **「添加账号 ▾」** 选择对应供应商，按提示在浏览器完成 OAuth 授权或填入 API Key（每个供应商最多可添加 10 个账号）。
@@ -115,7 +120,7 @@ curl http://localhost:8317/v1/messages \
 
 ## 配置说明
 
-在宿主 `config.yaml` 的 `plugins.configs.freetier2api` 下可配置以下常用项（大多数运行期设置可直接在控制台页面调整并即时生效）：
+在宿主 `config.yaml` 的 `plugins.configs.freetier2api-fork` 下可配置以下常用项（大多数运行期设置可直接在控制台页面调整并即时生效）：
 
 | 配置键 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |

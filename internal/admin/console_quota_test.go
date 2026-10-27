@@ -12,7 +12,7 @@ import (
 )
 
 func TestConsolePageHidesMissingTotal(t *testing.T) {
-	page := Page("/plugins/freetier2api")
+	page := Page("/plugins/freetier2api-fork")
 
 	for _, literal := range []string{
 		"var hasTotal = quota.total > 0;",

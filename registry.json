@@ -2,14 +2,14 @@
   "schema_version": 1,
   "plugins": [
     {
-      "id": "freetier2api",
-      "name": "FreeTier 2API",
-      "description": "把多个免费额度供应商（WorkBuddy 国内版/国际版、Qoder 国内版/国际版、OpenCode ZEN、Cline、ZCode、TRAE SOLO、Trae 国内版/国际版、CodeArts、MiniMax Code 国内版/国际版、AutoClaw 国内版/国际版、小浣熊）接入 CLIProxyAPI：auth / model / executor / quota / management 五类能力，按供应商插桩，支持凭证归属隔离、模型清单动态探测、单模型连通性测试、额度查询、每日签到、成长任务闭环与提示词防御；模型 ID 默认带供应商缩写后缀，便于区分同名模型。",
+      "id": "freetier2api-fork",
+      "name": "FreeTier 2API (Fork)",
+      "description": "把多个免费额度供应商（WorkBuddy 国内版/国际版、Qoder 国内版/国际版、OpenCode ZEN、Cline、ZCode、TRAE SOLO、Trae 国内版/国际版、CodeArts、MiniMax Code 国内版/国际版、AutoClaw 国内版/国际版、小浣熊）接入 CLIProxyAPI：auth / model / executor / quota / management 五类能力，按供应商插桩，支持凭证归属隔离、模型清单动态探测、单模型连通性测试、额度查询、每日签到、成长任务闭环与提示词防御；模型 ID 默认带供应商缩写后缀，便于区分同名模型。本条目是社区维护的 fork（插件 ID 为 freetier2api-fork），与上游同名插件互不影响，但两者共用同一 provider 键，请勿同时启用。",
       "author": "marcozyj",
       "repository": "https://github.com/marcozyj/CLIProxyAPI-freetier2api-plugin",
       "homepage": "https://github.com/marcozyj/CLIProxyAPI-freetier2api-plugin",
       "license": "MIT",
-      "version": "0.1.21",
+      "version": "0.1.22",
       "tags": [
         "Provider",
         "WorkBuddy",

@@ -74,7 +74,7 @@ func callModelTest(t *testing.T, service *Service, payload string) (int, modelTe
 	t.Helper()
 	response := service.modelTestHandler(pluginapi.ManagementRequest{
 		Method: "POST",
-		Path:   "/plugins/freetier2api/models/test",
+		Path:   "/plugins/freetier2api-fork/models/test",
 		Body:   []byte(payload),
 	})
 	var raw struct {
