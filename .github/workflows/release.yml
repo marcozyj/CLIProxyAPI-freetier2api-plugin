@@ -116,6 +116,21 @@ jobs:
           sha256sum *.zip > checksums.txt
           cat checksums.txt
 
+      # 同一 tag 被重跑/重复触发时，旧命名的资产会和新资产一起挂在 release 上，
+      # 商店按名字挑到哪个全看运气。发布前把不匹配的旧资产删掉。
+      - name: Drop stale assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          tag="${GITHUB_REF_NAME}"
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null |
+          while read -r name; do
+            [ "$name" = "checksums.txt" ] && continue
+            case "$name" in freetier2api-fork_*) continue ;; esac
+            gh release delete-asset "$tag" "$name" --repo "$GITHUB_REPOSITORY" -y || true
+          done
+
       - uses: softprops/action-gh-release@v2
         with:
           files: |
