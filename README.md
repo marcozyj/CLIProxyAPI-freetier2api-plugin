@@ -15,9 +15,9 @@
 ## 功能特性
 
 - 复用宿主 Anthropic `/v1/messages`、OpenAI `/v1/chat/completions` 与 OpenAI `/v1/responses` 接口，无需额外部署独立网关
-- 支持 8 大体系共 16 个国内外免费额度供应商实例（AutoClaw 国内/国际与小浣熊已接入），凭证严格按供应商隔离（单供应商上限 10 个账号）
+- 支持 8 大体系共 15 个国内外免费额度供应商实例（AutoClaw 国内/国际与小浣熊已接入），凭证严格按供应商隔离（单供应商上限 10 个账号）
 - 模型清单动态探测、自定义模型别名与跨供应商同名模型自动负载均衡/故障转移
-- 内嵌单页 Web 控制台：支持 OAuth 设备授权 / 本地回调粘贴 / API Key 添加账号、额度可视化、模型启停与运行日志
+- 内嵌单页 Web 控制台：支持 OAuth 设备授权 / 本地回调粘贴 / API Key 添加账号、账号自定义别名、账号批量启停/删除、额度可视化、签到历史回溯、模型启停与运行日志
 - 支持每日自动签到、每日自动任务与 Token 自动续期保活
 - 纯 Go 标准库实现，零第三方运行时依赖
 
@@ -35,7 +35,6 @@
 | `opencodezen` | OpenCode ZEN | `global` | API Key | `opencodezen-*.json` |
 | `cline` | Cline | `global` | WorkOS 设备授权 | `cline-*.json` |
 | `zcode` | ZCode | `global` | OAuth CLI 授权 | `zcode-*.json` |
-| `traesolo` | TRAE SOLO | `cn` | OAuth 授权 | `traesolo-*.json` |
 | `traecn` | Trae 国内版 | `cn` | OAuth 授权 | `traecn-*.json` |
 | `traeglobal` | Trae 国际版 | `global` | OAuth 授权 | `traeglobal-*.json` |
 | `codearts` | CodeArts | `cn` | OAuth 授权 | `codearts-*.json` |
@@ -120,6 +119,22 @@ curl http://localhost:8317/v1/messages \
 
 「模型 ID」列展示的就是客户端在 `/v1/models` 里看到的名字（默认带供应商缩写后缀，如 `GLM-5.3-zc`），照着页面填即可调用。点击该列的名称或 `✎` 图标可以设置对外模型别名。将不同供应商的模型设为同一别名（例如把多家供应商的旗舰模型统一设为 `coding-max`），宿主会自动合并并在多个供应商间负载均衡与故障转移。开启 `model_name_tag` 后对外 ID 带渠道标识，同名模型不再跨供应商合并。
 
+### 4. 账号别名
+
+账号概览的「账号」列默认显示上游回传的昵称/邮箱，部分平台只给不可修改的默认昵称，多账号时很难分辨。点击该列的名称或 `✎` 图标即可设置自定义别名，编辑框会预填当前名称；展示顺序变为 **别名 → 上游昵称/邮箱 → 文件名 → 账号 ID**。留空保存、或填回原名称，都视为不设别名（直接清除记录、沿用上游名称），未设置别名时行为不变。
+
+别名按**账号身份**（凭据文件名，即 `state.json` 里的 `account_aliases` 键）记录，与上游昵称、token 无关，因此 token 刷新、重登写回同一凭证文件后别名都不会丢。
+
+### 5. 账号批量操作
+
+账号表与模型表一样有勾选列，顶部按钮依次是 **添加账号 / 禁用选中 / 启用选中 / 全选 / 清空 / Token续期 / 查询额度 / 一键签到 / 一键做任务 / 删除**，末尾的筛选框按供应商、账号名、别名或文件名过滤（不匹配任何凭证内容）：
+
+- 默认全部未勾选。此时「删除」按钮禁用，Token续期、查询额度、一键签到、一键做任务作用于**全部账号**；
+- 勾选后，上述动作只作用于选中的账号；勾选状态在表格刷新后保留，已消失的账号自动出列；
+- 筛选只影响「看得到哪些行」：全选/清空作用于当前可见的行，已被筛掉的账号不会丢勾选，批量动作也仍按完整勾选集合执行；
+- 禁用不是删除：只在凭证 JSON 上写宿主的 `disabled` 标记（token 与文件都保留，随时可再启用），删除才会移除凭证文件；
+- 「删除」仍需点两次：第一次进入确认态（5 秒后自动复位），第二次才真正删除。
+
 ## 配置说明
 
 在宿主 `config.yaml` 的 `plugins.configs.freetier2api-fork` 下可配置以下常用项（大多数运行期设置可直接在控制台页面调整并即时生效）：
@@ -130,6 +145,7 @@ curl http://localhost:8317/v1/messages \
 | `auto_checkin` | bool | `true` | 每日自动签到开关 |
 | `auto_checkin_at` | string | `10:00` | 每日自动签到执行时间（`HH:MM`） |
 | `auto_tasks` | bool | `true` | 每日自动任务开关 |
+| `checkin_history_limit` | int | `30` | 每个账号保留的签到历史条数（`<=0` 用默认值 30；控制台签到列可展开查看） |
 | `prompt_mode` | string | `passthrough` | 提示词防御模式：`passthrough`（透传）/ `custom`（替换）/ `append`（追加） |
 | `model_name_tag` | string | `suffix` | 模型名渠道标识：`off` / `prefix` / `suffix`（默认）。默认给每个模型的对外 ID 加上供应商缩写后缀（如 `GLM-5.3-zc`、`deepseek-v4.1-flash-tr`），同一模型被多家供应商提供时在客户端里可以直接分辨；`off` 则保持官方 ID。缩写表见 `internal/core/tag.go`（ac=AutoClaw CN、wb=WorkBuddy CN、tr=Trae CN、zc=ZCode……），未登记的供应商退回用 vendorID。标识按供应商统一生成、不区分账号；改动后需宿主重建模型注册表生效（重启或等凭据重载，控制台会提示「待生效」） |
 | `disabled_models` | string / list | 空 | 禁用模型列表（支持 `vendor:model` 或裸名，与控制台勾选合并） |
@@ -161,6 +177,7 @@ package main / cgo        C ABI 入口（main.go / cgo.go）
 - 供应商包只允许依赖 `core`（契约）+ `hostbridge`（宿主通信）+ `logger`（日志），多一个都不行。
 - `internal/core` 只依赖标准库；`internal/app` 是最上层，且只有 `internal/app/vendors.go` 可以 import 具体供应商。
 - 新增内部包必须显式声明分层边界（`layerRules` / `internalPackages`）。
+- 根包（C ABI）的单测与源码同目录（`cgo_test.go`；宿主内存 / 只读页用例在 POSIX 上的 `cgo_hostbuffer_test.go`），不放进 `tests/`。
 
 ## 致谢与第三方说明
 

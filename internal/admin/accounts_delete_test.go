@@ -59,6 +59,20 @@ func writeAuthFile(t *testing.T, dir, name string, payload map[string]any) strin
 	return path
 }
 
+// TestCredentialVendorLabelResolvesRealVendor 锁定删除/停用日志里的 vendor 字段。
+//
+// issue #58：日志把文件名当 vendor 打印（vendor=codearts-codearts-user.json），
+// 排查时被误导。这里钉住「按凭证内容反查，查不到写 unknown」。
+func TestCredentialVendorLabelResolvesRealVendor(t *testing.T) {
+	registry := newDeleteTestRegistry(t)
+	if got := credentialVendorLabel(registry, []byte(`{"vendor":"traecn","uid":"u-1"}`), "traecn-u-1.json"); got != "traecn" {
+		t.Fatalf("vendor = %q, want traecn", got)
+	}
+	if got := credentialVendorLabel(registry, []byte(`{"foo":"bar"}`), "mystery.json"); got != "unknown" {
+		t.Fatalf("无法归属时应写 unknown，实际 %q", got)
+	}
+}
+
 // TestSafeAuthFileForDeleteRequiresNormalizedPath 锁定边界契约：删除校验只接受
 // 已经由 hostbridge 归一化的绝对路径。相对路径的解析在宿主边界做（见
 // hostbridge.ResolveAuthPath），端到端行为由 tests/integration 覆盖。
@@ -69,7 +83,7 @@ func TestSafeAuthFileForDeleteRequiresNormalizedPath(t *testing.T) {
 	hostRaw := []byte(`{"vendor":"traecn","uid":"u-1"}`)
 	registry := newDeleteTestRegistry(t)
 
-	got, errSafe := safeAuthFileForDelete(registry, entry, hostRaw, absolute)
+	got, errSafe := safeAuthFilePath(registry, entry, hostRaw, absolute)
 	if errSafe != nil {
 		t.Fatalf("绝对路径应允许删除: %v", errSafe)
 	}
@@ -77,7 +91,7 @@ func TestSafeAuthFileForDeleteRequiresNormalizedPath(t *testing.T) {
 		t.Fatalf("返回路径 = %q, want %q", got, absolute)
 	}
 
-	if _, errRelative := safeAuthFileForDelete(registry, entry, hostRaw, filepath.Base(absolute)); errRelative == nil {
+	if _, errRelative := safeAuthFilePath(registry, entry, hostRaw, filepath.Base(absolute)); errRelative == nil {
 		t.Fatal("未归一化的相对路径必须被拒绝（归一化是宿主边界的职责）")
 	}
 }
@@ -88,7 +102,7 @@ func TestSafeAuthFileForDeleteRequiresNormalizedPath(t *testing.T) {
 func TestSafeAuthFileForDeleteRejectsMissingFile(t *testing.T) {
 	dir := t.TempDir()
 	entry := core.HostAuth{Name: "traecn-u-1.json", AuthIndex: "1"}
-	_, errSafe := safeAuthFileForDelete(newDeleteTestRegistry(t), entry,
+	_, errSafe := safeAuthFilePath(newDeleteTestRegistry(t), entry,
 		[]byte(`{"vendor":"traecn","uid":"u-1"}`), filepath.Join(dir, "traecn-u-1.json"))
 	if errSafe == nil {
 		t.Fatal("文件不存在时必须报错，不能当作删除成功")
@@ -98,7 +112,7 @@ func TestSafeAuthFileForDeleteRejectsMissingFile(t *testing.T) {
 // TestSafeAuthFileForDeleteRejectsRuntimeCredential 运行时凭证没有文件可删。
 func TestSafeAuthFileForDeleteRejectsRuntimeCredential(t *testing.T) {
 	entry := core.HostAuth{Name: "traecn-u-1", AuthIndex: "1", RuntimeOnly: true}
-	if _, errSafe := safeAuthFileForDelete(newDeleteTestRegistry(t), entry,
+	if _, errSafe := safeAuthFilePath(newDeleteTestRegistry(t), entry,
 		[]byte(`{"vendor":"traecn","uid":"u-1"}`), ""); errSafe == nil {
 		t.Fatal("运行时凭证必须拒绝删除")
 	}
@@ -114,7 +128,7 @@ func TestSafeAuthFileForDeleteRejectsNonCredentialFiles(t *testing.T) {
 	payload := map[string]any{"vendor": "traecn", "uid": "u-1"}
 
 	textFile := writeAuthFile(t, dir, "traecn-u-1.txt", payload)
-	if _, errSafe := safeAuthFileForDelete(registry, entry, hostRaw, textFile); errSafe == nil {
+	if _, errSafe := safeAuthFilePath(registry, entry, hostRaw, textFile); errSafe == nil {
 		t.Fatal("非 .json 文件必须拒绝删除")
 	}
 
@@ -122,7 +136,7 @@ func TestSafeAuthFileForDeleteRejectsNonCredentialFiles(t *testing.T) {
 	if errMkdir := os.Mkdir(subdir, 0o755); errMkdir != nil {
 		t.Fatalf("mkdir: %v", errMkdir)
 	}
-	if _, errSafe := safeAuthFileForDelete(registry, entry, hostRaw, subdir); errSafe == nil {
+	if _, errSafe := safeAuthFilePath(registry, entry, hostRaw, subdir); errSafe == nil {
 		t.Fatal("目录必须拒绝删除")
 	}
 
@@ -131,7 +145,7 @@ func TestSafeAuthFileForDeleteRejectsNonCredentialFiles(t *testing.T) {
 	if errLink := os.Symlink(target, link); errLink != nil {
 		t.Skipf("symlink unavailable: %v", errLink)
 	}
-	if _, errSafe := safeAuthFileForDelete(registry, entry, hostRaw, link); errSafe == nil {
+	if _, errSafe := safeAuthFilePath(registry, entry, hostRaw, link); errSafe == nil {
 		t.Fatal("符号链接必须拒绝删除")
 	}
 }
@@ -144,7 +158,7 @@ func TestSafeAuthFileForDeleteRejectsForeignCredential(t *testing.T) {
 	path := writeAuthFile(t, dir, "traecn-u-1.json", map[string]any{"vendor": "traecn", "uid": "u-other"})
 	entry := core.HostAuth{Name: "traecn-u-1.json", AuthIndex: "1"}
 
-	if _, errSafe := safeAuthFileForDelete(registry, entry,
+	if _, errSafe := safeAuthFilePath(registry, entry,
 		[]byte(`{"vendor":"traecn","uid":"u-1"}`), path); errSafe == nil {
 		t.Fatal("目标文件属于另一个账号时必须拒绝删除")
 	}

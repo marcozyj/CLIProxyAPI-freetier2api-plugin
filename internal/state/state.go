@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"freetier2api-plugin/cpasdk/pluginapi"
@@ -37,6 +38,40 @@ type CheckinRecord struct {
 	Streak   int64  `json:"streak,omitempty"`
 	Credit   int64  `json:"credit,omitempty"`
 	Energy   int64  `json:"energy,omitempty"`
+}
+
+// DefaultCheckinHistoryLimit 是每个账号默认保留的签到历史条数。
+const DefaultCheckinHistoryLimit = 30
+
+// CheckinHistoryEntry 是一次签到执行的记录（滚动历史，每个账号只留最近若干条）。
+//
+// 不含 account / vendor 字段：身份由 map 键承载（见 CheckinHistoryKey）。
+// 账号 label 在 apikey 型供应商里就是密钥本身，抄进 state.json 等于把凭证落盘。
+type CheckinHistoryEntry struct {
+	// RunAt 是本次执行时间（RFC3339）。
+	RunAt string `json:"run_at"`
+	// Trigger 是触发方式：schedule（定时调度）/ manual（手动或额度重置）。
+	Trigger string `json:"trigger,omitempty"`
+	// Status 是本次结果：success / already / error。
+	Status string `json:"status"`
+	// Message 是本次结果的说明；失败时即报错原文。
+	Message string `json:"message,omitempty"`
+	// Credit 是本次所得积分。
+	Credit int64 `json:"credit,omitempty"`
+}
+
+// CheckinHistoryKey 返回签到历史的账号键：供应商 + 账号身份（FileID 优先）。
+//
+// 键型与额度缓存一致（vendor + 账号身份）：Name / Label 跨供应商并不唯一，
+// 少了供应商维度就会让不同渠道的同名账号互相串记录。任一为空时返回空键，
+// 调用方据此放弃落库。
+func CheckinHistoryKey(vendorID, accountID string) string {
+	vendorID = strings.TrimSpace(vendorID)
+	accountID = strings.TrimSpace(accountID)
+	if vendorID == "" || accountID == "" {
+		return ""
+	}
+	return vendorID + "\x00" + accountID
 }
 
 // ClaimRecord 是某账号最近一次的套餐领取状态。
@@ -88,11 +123,20 @@ type State struct {
 	// ModelAliases 是模型别名表：<vendorID>:<官方模型 ID> → 对外别名。
 	ModelAliases map[string]string `json:"model_aliases,omitempty"`
 
+	// AccountAliases 是账号别名表：账号身份（FileID）→ 展示别名。
+	//
+	// 键必须是稳定账号身份，不能用昵称/邮箱：前者跨账号不唯一、上游改一次就变，
+	// 拿它做键会让别名在重登后丢失，或串到另一个账号头上。FileID 只由凭证
+	// 文件名决定，token 刷新与重登都不动它（见 core.Credential.FileID）。
+	AccountAliases map[string]string `json:"account_aliases,omitempty"`
+
 	// RestartPending 标记「已有模型变更，但宿主的模型注册表尚未刷新」。
 	RestartPending bool `json:"restart_pending,omitempty"`
 
 	// Checkin 按账号 UID 记录签到状态。
 	Checkin map[string]CheckinRecord `json:"checkin,omitempty"`
+	// CheckinHistory 按 CheckinHistoryKey 保存每个账号最近的签到执行记录（新→旧）。
+	CheckinHistory map[string][]CheckinHistoryEntry `json:"checkin_history,omitempty"`
 	// Tasks 按「uid\x1f任务码」记录任务执行历史。
 	Tasks map[string]TaskRecord `json:"tasks,omitempty"`
 	// Claim 按账号 FileID 记录套餐领取状态（额度查询时顺带刷新）。
@@ -119,12 +163,14 @@ func (s *Store) Configure(dir string) {
 // New 返回一个补齐 map 的空状态。
 func New() *State {
 	return &State{
-		Version:       Version,
-		Checkin:       map[string]CheckinRecord{},
-		Tasks:         map[string]TaskRecord{},
-		Claim:         map[string]ClaimRecord{},
-		ModelAliases:  map[string]string{},
-		TaskSchedules: map[string][]int{},
+		Version:        Version,
+		Checkin:        map[string]CheckinRecord{},
+		CheckinHistory: map[string][]CheckinHistoryEntry{},
+		Tasks:          map[string]TaskRecord{},
+		Claim:          map[string]ClaimRecord{},
+		ModelAliases:   map[string]string{},
+		AccountAliases: map[string]string{},
+		TaskSchedules:  map[string][]int{},
 	}
 }
 
@@ -187,6 +233,9 @@ func normalize(state *State) {
 	if state.Checkin == nil {
 		state.Checkin = map[string]CheckinRecord{}
 	}
+	if state.CheckinHistory == nil {
+		state.CheckinHistory = map[string][]CheckinHistoryEntry{}
+	}
 	if state.Tasks == nil {
 		state.Tasks = map[string]TaskRecord{}
 	}
@@ -195,6 +244,9 @@ func normalize(state *State) {
 	}
 	if state.ModelAliases == nil {
 		state.ModelAliases = map[string]string{}
+	}
+	if state.AccountAliases == nil {
+		state.AccountAliases = map[string]string{}
 	}
 }
 
@@ -234,6 +286,10 @@ func clone(state *State) State {
 	for key, value := range state.Checkin {
 		out.Checkin[key] = value
 	}
+	out.CheckinHistory = make(map[string][]CheckinHistoryEntry, len(state.CheckinHistory))
+	for key, history := range state.CheckinHistory {
+		out.CheckinHistory[key] = append([]CheckinHistoryEntry(nil), history...)
+	}
 	out.Tasks = make(map[string]TaskRecord, len(state.Tasks))
 	for key, value := range state.Tasks {
 		out.Tasks[key] = value
@@ -245,6 +301,10 @@ func clone(state *State) State {
 	out.ModelAliases = make(map[string]string, len(state.ModelAliases))
 	for key, value := range state.ModelAliases {
 		out.ModelAliases[key] = value
+	}
+	out.AccountAliases = make(map[string]string, len(state.AccountAliases))
+	for key, value := range state.AccountAliases {
+		out.AccountAliases[key] = value
 	}
 	return out
 }

@@ -21,6 +21,7 @@ import (
 	"freetier2api-plugin/internal/core"
 	"freetier2api-plugin/internal/hostbridge"
 	"freetier2api-plugin/internal/logger"
+	"freetier2api-plugin/internal/tasks"
 )
 
 const (
@@ -226,6 +227,10 @@ func executorStreamPayload(payload []byte) []byte {
 // 宿主对每一条 SSE 行都调一次，参数里带着完整客户端请求与上游请求（可达数 MB）。
 // 因此这里绝不整包解码 ResponseTransformRequest，取值走 scanResponseTransform
 // 的单次线性扫描（见 responsegate.go 的说明）。
+//
+// 入参可能是宿主的只读缓冲区：C ABI 对该方法直接借用宿主内存（见根目录
+// cgo.go 的 hostRequestBytes / isReadOnlyRequestMethod）。因此这里只能只读扫描，
+// 不得就地修改 request，也不得把它的任何片段保存到调用返回之后。
 //
 // 返回空 PayloadResponse 表示「未修改」——宿主对此明确按 no-op 处理
 // （callResponseNormalizer 在 len(Body)==0 时保留原 body）。
@@ -463,20 +468,9 @@ func (a *App) handleQuotaReset(request []byte) ([]byte, error) {
 			Message: message,
 		})
 	}
-	checkin, okCheckin := core.As[core.CheckinProvider](vendor)
-	if !okCheckin {
-		return core.OKEnvelope(pluginapi.QuotaResetResponse{
-			Success: false,
-			Message: "本供应商不提供签到；额度按上游周期自动重置",
-		})
-	}
-
-	result, errCheckin := checkin.Checkin(ctx, credential)
+	result, errCheckin := a.tasks.Checkin(ctx, vendor, credential, tasks.CheckinTriggerManual)
 	if errCheckin != nil {
 		return nil, core.ToPluginError(errCheckin)
-	}
-	if result == nil {
-		return core.OKEnvelope(pluginapi.QuotaResetResponse{Success: false, Message: "签到未返回结果"})
 	}
 	// NotRecorded 表示这次签到没有真正完成（上游窗口未开启、领取被拒、
 	// 未确认发放）。此时不能报成功——否则宿主与控制台都会显示「已重置」

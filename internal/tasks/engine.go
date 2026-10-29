@@ -163,9 +163,12 @@ func (s *Service) effectiveSettings() map[string]any {
 }
 
 // forEachAccount 遍历本插件名下可用的账号。
-func (s *Service) forEachAccount(ctx context.Context, callbackID string, fn func(context.Context, *accountContext) error) {
+//
+// targets 为空表示全部账号；非空时只遍历命中的那些（管理端的批量勾选）。
+func (s *Service) forEachAccount(ctx context.Context, callbackID string, targets []string, fn func(context.Context, *accountContext) error) {
 	cfg := s.deps.Config()
 	accounts, failures := s.deps.Pool().Load(ctx, callbackID, auth.Options{
+		Targets:       targets,
 		EnabledRealms: cfg.EnabledRealms,
 	})
 	for _, failure := range failures {
@@ -220,23 +223,15 @@ func (s *Service) runCheckinAll(ctx context.Context) {
 	}
 	logger.Info("checkin: starting for all accounts")
 	count := 0
-	s.forEachAccount(ctx, "", func(ctx context.Context, account *accountContext) error {
+	s.forEachAccount(ctx, "", nil, func(ctx context.Context, account *accountContext) error {
 		if !core.SupportsCheckinFor(account.vendor, account.credential) {
 			return nil
 		}
-		checkin, okCheckin := core.As[core.CheckinProvider](account.vendor)
-		if !okCheckin {
-			return nil
-		}
-		result, errCheckin := checkin.Checkin(ctx, account.credential)
+		result, errCheckin := s.Checkin(ctx, account.vendor, account.credential, CheckinTriggerSchedule)
 		if errCheckin != nil {
 			logger.Error("checkin %s: %v", account.label(), errCheckin)
 			return nil
 		}
-		if result == nil {
-			return nil
-		}
-		s.recordCheckinResult(account.credential, result)
 		switch {
 		case result.NotRecorded:
 			// 本次没真正领到（窗口未开启 / 领取被拒 / 未确认发放）。
@@ -270,7 +265,7 @@ func (s *Service) runCheckinAll(ctx context.Context) {
 func (s *Service) runScheduledFamily(ctx context.Context, kind string) {
 	logger.Info("%s: starting for all accounts", kind)
 	count := 0
-	s.forEachAccount(ctx, "", func(ctx context.Context, account *accountContext) error {
+	s.forEachAccount(ctx, "", nil, func(ctx context.Context, account *accountContext) error {
 		if kind == core.TaskKindKeepalive {
 			result := s.keepaliveOne(ctx, "", account)
 			if !result.OK {
@@ -281,22 +276,31 @@ func (s *Service) runScheduledFamily(ctx context.Context, kind string) {
 			count++
 			return nil
 		}
-		runner, okRunner := core.As[core.ScheduledRunner](account.vendor)
-		if !okRunner {
-			return nil
-		}
-		message, errRun := runner.RunScheduled(ctx, account.credential, kind)
-		if errRun != nil {
-			logger.Error("%s %s: %v", kind, account.label(), errRun)
-			return nil
-		}
-		if message != "" {
+		if message := s.runScheduledForAccount(ctx, account, kind); message != "" {
 			logger.Info("%s %s: %s", kind, account.label(), message)
 			count++
 		}
 		return nil
 	})
 	logger.Info("%s: finished for %d account(s)", kind, count)
+}
+
+// runScheduledForAccount 让账号所属供应商执行一个定时任务族，返回可读结果。
+//
+// 排程是全局的（task_schedules 不区分供应商与账号），执行前必须按供应商声明的
+// TaskSpecs 过滤：未声明的族对它没有实现，静默跳过即可，不能落 ERROR——否则
+// 每到一个排程点就刷一条「unknown scheduled task kind」，把真实错误淹没（issue #58）。
+func (s *Service) runScheduledForAccount(ctx context.Context, account *accountContext, kind string) string {
+	runner, okRunner := core.As[core.ScheduledRunner](account.vendor)
+	if !okRunner || !core.SupportsScheduledKind(account.vendor, kind) {
+		return ""
+	}
+	message, errRun := runner.RunScheduled(ctx, account.credential, kind)
+	if errRun != nil {
+		logger.Error("%s %s: %v", kind, account.label(), errRun)
+		return ""
+	}
+	return message
 }
 
 const (
@@ -369,7 +373,7 @@ func (s accountScan) MarshalJSON() ([]byte, error) {
 
 // scanAllAccounts 并发扫描每个账号的待办任务。
 func (s *Service) scanAllAccounts(ctx context.Context, callbackID string) []accountScan {
-	loaded := s.collectAccounts(ctx, callbackID)
+	loaded := s.collectAccounts(ctx, callbackID, nil)
 	scans := auth.RunBatch(loaded, queueMaxConcurrency, func(account *accountContext) accountScan {
 		return s.scanOneAccount(ctx, account)
 	})
@@ -494,7 +498,7 @@ func (s *Service) runQueueItems(callbackID string, concurrency int, seq int64) {
 	}()
 
 	ctx := context.Background()
-	loaded := s.collectAccounts(ctx, callbackID)
+	loaded := s.collectAccounts(ctx, callbackID, nil)
 	byUID := make(map[string]*accountContext, len(loaded))
 	for _, account := range loaded {
 		byUID[account.uid()] = account
@@ -664,10 +668,10 @@ func (s *Service) runAutoAll(ctx context.Context, account *accountContext) []aut
 	return results
 }
 
-// collectAccounts 收集本插件名下的可用账号。
-func (s *Service) collectAccounts(ctx context.Context, callbackID string) []*accountContext {
+// collectAccounts 收集本插件名下的可用账号；targets 为空表示全部。
+func (s *Service) collectAccounts(ctx context.Context, callbackID string, targets []string) []*accountContext {
 	accounts := make([]*accountContext, 0, 8)
-	s.forEachAccount(ctx, callbackID, func(_ context.Context, account *accountContext) error {
+	s.forEachAccount(ctx, callbackID, targets, func(_ context.Context, account *accountContext) error {
 		accounts = append(accounts, account)
 		return nil
 	})
@@ -681,7 +685,7 @@ func (s *Service) findAccount(ctx context.Context, callbackID, identifier string
 		return nil
 	}
 	var found *accountContext
-	s.forEachAccount(ctx, callbackID, func(_ context.Context, account *accountContext) error {
+	s.forEachAccount(ctx, callbackID, nil, func(_ context.Context, account *accountContext) error {
 		if found != nil {
 			return nil
 		}
@@ -697,7 +701,7 @@ func (s *Service) findAccount(ctx context.Context, callbackID, identifier string
 
 // activityStatusForAccounts 返回各账号的活动任务状态（供管理页展示）。
 func (s *Service) activityStatusForAccounts(ctx context.Context, callbackID string) []map[string]any {
-	loaded := s.collectAccounts(ctx, callbackID)
+	loaded := s.collectAccounts(ctx, callbackID, nil)
 	out := auth.RunBatch(loaded, queueMaxConcurrency, func(target *accountContext) map[string]any {
 		entry := map[string]any{
 			"uid":   target.uid(),
@@ -736,44 +740,6 @@ func (s *Service) activityStatusForAccounts(ctx context.Context, callbackID stri
 	return out
 }
 
-// todayString 返回当前日期（本地时钟）。
-func (s *Service) todayString() string { return s.deps.Now().Format("2006-01-02") }
-
 func taskStateKey(uid, code string) string {
 	return strings.TrimSpace(uid) + "\x1f" + strings.TrimSpace(code)
-}
-
-// RecordCheckin 把一次签到结果写进状态（供页面展示）。
-//
-// 管理接口与调度器共用这一份实现，避免状态写入逻辑出现两份。
-func (s *Service) RecordCheckin(credential *core.Credential, result *core.CheckinResult) {
-	s.recordCheckinResult(credential, result)
-}
-
-func (s *Service) recordCheckinResult(credential *core.Credential, result *core.CheckinResult) {
-	if credential == nil || result == nil {
-		return
-	}
-	uid := credential.FileIDValue()
-	if uid == "" {
-		return
-	}
-	// 供应商显式声明「本次未完成今日签到」时不落库：把「上游窗口未开启」
-	// 之类的状态记成今日已签到，会让页面显示假性成功，而上游窗口错过
-	// 不补领——用户以为领到了，实际积分永远拿不到。
-	if result.NotRecorded {
-		return
-	}
-	today := s.todayString()
-	s.deps.MutateState(func(current *state.State) {
-		record := current.Checkin[uid]
-		record.LastDate = today
-		if result.Credit > 0 {
-			record.Credit = result.Credit
-		}
-		if result.Energy > 0 {
-			record.Energy = result.Energy
-		}
-		current.Checkin[uid] = record
-	})
 }

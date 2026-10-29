@@ -15,9 +15,9 @@ If this project helps you, a Star would mean a lot.
 ## Features
 
 - Native integration with CLIProxyAPI's Anthropic `/v1/messages`, OpenAI `/v1/chat/completions`, and OpenAI `/v1/responses` endpoints without running a separate gateway service
-- Supports 16 free-tier provider instances across 8 vendor families (AutoClaw CN/Global and Raccoon included) with strict per-vendor credential isolation (capped at 10 accounts per provider)
+- Supports 15 free-tier provider instances across 8 vendor families (AutoClaw CN/Global and Raccoon included) with strict per-vendor credential isolation (capped at 10 accounts per provider)
 - Dynamic model catalog discovery, custom model aliases, and cross-provider load balancing / failover
-- Built-in single-page Web console for OAuth device login, localhost callback paste, API Key import, quota tracking, model toggling, and live logs
+- Built-in single-page Web console for OAuth device login, localhost callback paste, API Key import, account aliases and batch enable/disable/delete, quota tracking, check-in history, model toggling, and live logs
 - Automated daily check-in, automated daily tasks, and token keepalive refresh
 - Pure Go standard library implementation with zero third-party runtime dependencies
 
@@ -35,7 +35,6 @@ If this project helps you, a Star would mean a lot.
 | `opencodezen` | OpenCode ZEN | `global` | API Key | `opencodezen-*.json` |
 | `cline` | Cline | `global` | WorkOS Device Flow | `cline-*.json` |
 | `zcode` | ZCode | `global` | OAuth CLI Flow | `zcode-*.json` |
-| `traesolo` | TRAE SOLO | `cn` | OAuth Flow | `traesolo-*.json` |
 | `traecn` | Trae CN | `cn` | OAuth Flow | `traecn-*.json` |
 | `traeglobal` | Trae Global | `global` | OAuth Flow | `traeglobal-*.json` |
 | `codearts` | CodeArts | `cn` | OAuth Flow | `codearts-*.json` |
@@ -115,6 +114,22 @@ curl http://localhost:8317/v1/messages \
 
 In the Models table of the console, click any model ID or its `✎` icon to assign an external alias. Assigning the same alias to models across different providers merges them into a single logical model ID in CLIProxyAPI for automatic cross-provider load balancing and failover.
 
+### 4. Account Aliases
+
+The Accounts table shows whatever nickname or email the upstream returns, and some platforms only hand out a default nickname that cannot be changed — with several accounts it becomes impossible to tell them apart. Click the account name or its `✎` icon to set a custom alias; the editor is prefilled with the current name, and the display order becomes **alias → upstream nickname/email → file name → account ID**. Saving an empty value, or typing the original name back, means "no alias" — the record is cleared and the upstream name is used, so behavior is unchanged when no alias is set.
+
+Aliases are stored in `state.json` under `account_aliases`, keyed by account identity (the credential file name, i.e. `core.Credential.FileID`) rather than by nickname or token, so they survive token refresh and re-login into the same credential file.
+
+### 5. Account Batch Actions
+
+The Accounts table has a selection column like the Models table. The toolbar reads **Add account / Disable selected / Enable selected / Select all / Clear / Token refresh / Query quota / Check in / Run tasks / Delete**, followed by a filter box that matches provider, account name, alias or file name (never credential contents):
+
+- Nothing is selected by default. Delete is disabled while the selection is empty, and Token refresh, Query quota, Check in and Run tasks act on **all accounts**;
+- With a selection, those actions only touch the selected accounts. The selection survives table refreshes, and accounts that disappear drop out of it automatically;
+- Filtering only changes which rows are visible: Select all / Clear act on the visible rows, accounts hidden by the filter keep their selection, and batch actions still run against the full selection;
+- Disabling is not deleting: it only writes the host's `disabled` flag into the credential JSON (token and file are kept, so it is reversible). Delete removes the credential file;
+- Delete still takes two clicks: the first arms the button (auto-reset after 5 seconds), the second deletes.
+
 ## Configuration
 
 Configure under `plugins.configs.freetier2api` in `config.yaml` (runtime settings can also be toggled live in the web console):
@@ -125,6 +140,7 @@ Configure under `plugins.configs.freetier2api` in `config.yaml` (runtime setting
 | `auto_checkin` | bool | `true` | Enable automated daily check-in |
 | `auto_checkin_at` | string | `10:00` | Daily check-in time (`HH:MM`, local time) |
 | `auto_tasks` | bool | `true` | Enable automated daily tasks |
+| `checkin_history_limit` | int | `30` | Check-in records kept per account (`<=0` falls back to 30; expandable in the console) |
 | `prompt_mode` | string | `passthrough` | System prompt filter mode: `passthrough` / `custom` / `append` |
 | `model_name_tag` | string | `suffix` | Channel tag on model IDs: `off` / `prefix` / `suffix` (default). Every vendor model gets a vendor-abbreviation suffix in its public ID (e.g. `GLM-5.3-zc`, `deepseek-v4.1-flash-tr`), so the same model served by several vendors stays distinguishable in clients; `off` keeps the upstream ID. Abbreviations live in `internal/core/tag.go` (ac=AutoClaw CN, wb=WorkBuddy CN, tr=Trae CN, zc=ZCode, …); unregistered vendors fall back to the vendor ID. Tags are per-vendor, not per-account; once tagged, same-name models are no longer merged across vendors. Takes effect after the host rebuilds its model registry (restart or credential reload; the console shows a restart-pending hint) |
 | `disabled_models` | string / list | empty | Disabled models (`vendor:model` or bare name) |
@@ -156,6 +172,7 @@ package main / cgo        C ABI entry (main.go / cgo.go)
 - Vendor packages may depend only on `core` + `hostbridge` + `logger`.
 - `internal/core` depends only on the standard library; only `internal/app/vendors.go` may import concrete vendors.
 - Every new internal package must declare its layer boundary (`layerRules` / `internalPackages`).
+- Root-package (C ABI) tests live beside the source (`cgo_test.go`; host-buffer and read-only-page cases in `cgo_hostbuffer_test.go` on POSIX), not under `tests/`.
 
 ## Acknowledgments & Third-Party Notices
 

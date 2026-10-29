@@ -557,3 +557,91 @@ func TestConsoleSettingsSyncsModelRegistryImmediately(t *testing.T) {
 		}
 	}
 }
+
+// TestConsoleAccountAliasReusesInlineEditor 锁定账号别名的接线与「只有一份」。
+//
+// 账号别名与模型别名是同一套交互（点击 ✎、回车/失焦保存、Esc 取消），实现
+// 必须只有 editableCell 一份：复制第二份意味着键盘行为、回退策略、错误提示
+// 迟早分叉。账号别名按账号身份 file_id 提交，不用昵称/邮箱。
+func TestConsoleAccountAliasReusesInlineEditor(t *testing.T) {
+	page := Page("/plugins/freetier2api")
+
+	for _, literal := range []string{
+		"function editableCell(opts)", // 共用编辑器
+		"function accountNameCell(account)",
+		"accountNameCell(account)", // 账号列确实用它渲染
+		`api("POST", "/accounts/alias"`,
+		"account.file_id",
+		"account.alias",
+	} {
+		if !strings.Contains(page, literal) {
+			t.Fatalf("console page missing account-alias wiring %q", literal)
+		}
+	}
+
+	if count := strings.Count(page, `input.addEventListener("blur"`); count != 1 {
+		t.Fatalf("inline editing must have exactly one implementation, found %d blur handlers", count)
+	}
+}
+
+// TestConsoleAccountAliasPrefillsCurrentName 锁定账号别名的编辑预填与归一：
+// 点开编辑框时预填当前生效名称（与模型别名一致），留空或填回原名称都视为
+// 「不设别名」，不会在 state 里留一条与上游同名的副本。
+func TestConsoleAccountAliasPrefillsCurrentName(t *testing.T) {
+	page := Page("/plugins/freetier2api")
+
+	for _, literal := range []string{
+		"function accountOriginalName(account)",
+		"prefill: function () { return accountOriginalName(account); }",
+		`normalize: function (next) { return next === accountOriginalName(account) ? "" : next; }`,
+	} {
+		if !strings.Contains(page, literal) {
+			t.Fatalf("console page missing account-alias prefill wiring %q", literal)
+		}
+	}
+}
+
+// TestConsoleAccountsTableSupportsBatchSelection 锁定账号表的批量操作接线：
+// 勾选列在首位、状态列在供应商列左侧、操作列已移除（删除改到顶部按钮）。
+func TestConsoleAccountsTableSupportsBatchSelection(t *testing.T) {
+	page := Page("/plugins/freetier2api")
+
+	for _, literal := range []string{
+		`["", "状态", "供应商", "账号", "签到", "剩余 / 总额", "使用率", "刷新时间"]`,
+		"function accountCheckCell(account)",
+		`id="btnDeleteAccounts"`,
+		`id="btnDisableAccounts"`,
+		`id="btnEnableAccounts"`,
+		`id="btnSelectAllAccounts"`,
+		`id="btnSelectNoneAccounts"`,
+		`"/accounts/enabled"`,
+		`id="accountFilter"`,
+		"function accountMatchesFilter(account, filter)",
+	} {
+		if !strings.Contains(page, literal) {
+			t.Fatalf("console page missing account batch wiring %q", literal)
+		}
+	}
+	if strings.Contains(page, `"操作"`) {
+		t.Fatal("账号表的操作列已移除，删除改由顶部按钮完成")
+	}
+}
+
+// TestConsolePageShowsCheckinHistory 验证签到历史在控制台可展开查看。
+//
+// 横幅只显示几秒钟，失败账号与报错原文必须能在页面上事后回溯；历史入口挂在
+// 每个账号自己的签到列上（同一张表、同一份 /status 数据，不再发额外请求）。
+func TestConsolePageShowsCheckinHistory(t *testing.T) {
+	page := Page("/plugins/freetier2api")
+
+	for _, literal := range []string{
+		"account.checkin_history",      // 历史来自 /status 的账号条目
+		"buildCheckinHistoryRow",       // 展开行的构造点
+		`entry.trigger === "schedule"`, // 触发方式要在页面上区分定时/手动
+		"checkinStatusPill",            // 三种状态各自着色
+	} {
+		if !strings.Contains(page, literal) {
+			t.Fatalf("console page is missing the checkin history UI (%s)", literal)
+		}
+	}
+}

@@ -16,6 +16,7 @@ import (
 	"freetier2api-plugin/internal/hostbridge"
 	"freetier2api-plugin/internal/logger"
 	"freetier2api-plugin/internal/state"
+	"freetier2api-plugin/internal/tasks"
 )
 
 // StatusPayload 构造账号状态概览（导出给根层测试/兼容包装）。
@@ -54,9 +55,23 @@ func (s *Service) buildStatusPayload(req pluginapi.ManagementRequest) map[string
 
 // accountSummary 是账号概览条目（不含凭证）。
 type accountSummary struct {
-	AuthID          string               `json:"auth_id"`
-	AuthIndex       string               `json:"auth_index"`
-	Label           string               `json:"label"`
+	AuthID    string `json:"auth_id"`
+	AuthIndex string `json:"auth_index"`
+	// FileID 是账号身份（凭据文件名去 .json）：别名的键，也是页面向
+	// /accounts/alias 提交的唯一标识。头两个字段（host 的 auth_id /
+	// auth_index）会随宿主重扫变化，不能拿来当键。
+	FileID string `json:"file_id,omitempty"`
+	// Label 是**展示名**，链：账号别名 → 上游 label → host label → 文件名 → ID。
+	// 别名是第一优先级，未设置时行为与引入别名之前完全一致。
+	Label string `json:"label"`
+	// NativeLabel 是去掉别名后的上游名称（上游 label → host label → 文件名 → ID）。
+	//
+	// 页面需要它来判断「用户填的名字是否就是原名」：填回原名不该存成一条
+	// 与上游永远同步不了的别名。展示链里别名会覆盖 Label，因此必须单独给出。
+	NativeLabel string `json:"native_label,omitempty"`
+	// Alias 是用户自定义别名；空表示未设置。页面据此决定是否跳过 API key
+	// 脱敏（别名是用户起的名字，不是凭证）。
+	Alias           string               `json:"alias,omitempty"`
 	VendorID        string               `json:"vendor_id"`
 	VendorName      string               `json:"vendor_name"`
 	Realm           string               `json:"realm"`
@@ -72,6 +87,8 @@ type accountSummary struct {
 	// Claim 是该账号的套餐领取状态；SupportsClaim 为 false 时前端不渲染入口。
 	Claim         *state.ClaimRecord `json:"claim,omitempty"`
 	SupportsClaim bool               `json:"supports_claim"`
+	// CheckinHistory 是该账号最近的签到执行记录（新→旧，最多 checkin_history_limit 条）。
+	CheckinHistory []state.CheckinHistoryEntry `json:"checkin_history,omitempty"`
 }
 
 // quotaCacheKey 返回额度缓存的唯一键：供应商 + 账号身份（FileID 优先，AuthID 兜底）。
@@ -126,10 +143,16 @@ func (s *Service) listAccountSummaries(ctx context.Context, callbackID string) [
 		entry := account.Entry
 		credential := account.Credential
 		vendor := account.Vendor
+		uid := credential.FileIDValue()
+		alias := strings.TrimSpace(current.AccountAliases[uid])
+		native := core.FirstNonEmpty(credential.LabelValue(), entry.Label, entry.Name, entry.ID)
 		summary := accountSummary{
 			AuthID:          core.FirstNonEmpty(entry.ID, entry.Name),
 			AuthIndex:       entry.AuthIndex,
-			Label:           core.FirstNonEmpty(credential.LabelValue(), entry.Label, entry.Name, entry.ID),
+			FileID:          uid,
+			Alias:           alias,
+			Label:           core.FirstNonEmpty(alias, native),
+			NativeLabel:     native,
 			VendorID:        vendor.ID(),
 			VendorName:      vendor.Name(),
 			Realm:           credential.RegionValue(),
@@ -150,12 +173,12 @@ func (s *Service) listAccountSummaries(ctx context.Context, callbackID string) [
 		if !modTime.IsZero() {
 			summary.RefreshedAt = modTime.Format(time.RFC3339)
 		}
-		uid := credential.FileIDValue()
 		if record, okRecord := current.Checkin[uid]; okRecord {
 			summary.Checkin = &record
 		} else if record, okLegacy := lookupLegacyCheckin(current, credential); okLegacy {
 			summary.Checkin = &record
 		}
+		summary.CheckinHistory = current.CheckinHistory[state.CheckinHistoryKey(vendor.ID(), uid)]
 		if record, okRecord := current.Claim[uid]; okRecord {
 			claim := record
 			summary.Claim = &claim
@@ -220,6 +243,79 @@ type accountBatchRequest struct {
 	AccountIDs []string `json:"account_ids"`
 }
 
+// accountEnabledRequest 是启用/停用账号的请求体。
+type accountEnabledRequest struct {
+	AccountIDs []string `json:"account_ids"`
+	Enabled    bool     `json:"enabled"`
+}
+
+// handleAccountEnabledRequest 批量启用/停用账号。
+//
+// 停用不是删除：凭证文件保留，只在 JSON 上写宿主认的 "disabled" 字段，宿主
+// 扫盘后该账号不再参与路由；启用即删掉该字段。两者都不动 token，随时可逆。
+func (s *Service) handleAccountEnabledRequest(req pluginapi.ManagementRequest) pluginapi.ManagementResponse {
+	body, errDecode := decodeRequest[accountEnabledRequest](req.Body)
+	if errDecode != nil {
+		return BadJSONRequestResponse()
+	}
+	if len(body.AccountIDs) == 0 {
+		return JSONResponse(http.StatusBadRequest, map[string]any{"ok": false, "error": "account_ids 不能为空"})
+	}
+	ctx, cancel := hostbridge.ManagementContext(req, requestTimeout)
+	defer cancel()
+	callbackID := hostbridge.RequestCallbackID(req)
+
+	entries, errList := hostbridge.ListAuths(ctx, callbackID, s.registry)
+	if errList != nil {
+		return JSONResponse(http.StatusOK, map[string]any{"ok": false, "error": "读取账号列表失败：" + errList.Error()})
+	}
+	wanted := wantedAccountIDs(body.AccountIDs)
+	results := make([]accountActionResult, 0, len(body.AccountIDs))
+	changed := 0
+	for _, entry := range entries {
+		if !wanted.matches(entry) || entry.Disabled == !body.Enabled {
+			// 已经是目标状态的不重复写盘：宿主扫盘会再触发一次重载。
+			continue
+		}
+		result := accountActionResult{
+			AuthID: core.FirstNonEmpty(entry.ID, entry.Name),
+			Label:  core.FirstNonEmpty(entry.Label, entry.Name, entry.ID),
+		}
+		if errSet := s.setAuthDisabled(ctx, callbackID, entry, !body.Enabled); errSet != nil {
+			result.Message = errSet.Error()
+			results = append(results, result)
+			continue
+		}
+		result.OK = true
+		if body.Enabled {
+			result.Message = "已启用"
+		} else {
+			result.Message = "已禁用"
+		}
+		changed++
+		results = append(results, result)
+	}
+	return JSONResponse(http.StatusOK, map[string]any{"ok": true, "changed": changed, "results": results})
+}
+
+// wantedAccountIDs 把页面提交的账号标识集合包成匹配器。
+//
+// 页面用 auth_id 作为勾选键（账号表里的唯一稳定标识），但宿主的三个标识
+// （ID / Name / AuthIndex）都可能在重扫后变化，统一在这里比对一次。
+func wantedAccountIDs(targets []string) accountIDSet {
+	set := make(accountIDSet, len(targets))
+	for _, target := range targets {
+		set[strings.TrimSpace(target)] = true
+	}
+	return set
+}
+
+type accountIDSet map[string]bool
+
+func (s accountIDSet) matches(entry core.HostAuth) bool {
+	return s[entry.ID] || s[entry.Name] || s[entry.AuthIndex]
+}
+
 func (s *Service) handleAccountDeleteRequest(req pluginapi.ManagementRequest) pluginapi.ManagementResponse {
 	body, errDecode := decodeRequest[accountBatchRequest](req.Body)
 	if errDecode != nil {
@@ -236,14 +332,11 @@ func (s *Service) handleAccountDeleteRequest(req pluginapi.ManagementRequest) pl
 	if errList != nil {
 		return JSONResponse(http.StatusOK, map[string]any{"ok": false, "error": "读取账号列表失败：" + errList.Error()})
 	}
-	wanted := make(map[string]bool, len(body.AccountIDs))
-	for _, target := range body.AccountIDs {
-		wanted[strings.TrimSpace(target)] = true
-	}
+	wanted := wantedAccountIDs(body.AccountIDs)
 	results := make([]accountActionResult, 0, len(body.AccountIDs))
 	deleted := 0
 	for _, entry := range entries {
-		if !wanted[entry.ID] && !wanted[entry.Name] && !wanted[entry.AuthIndex] {
+		if !wanted.matches(entry) {
 			continue
 		}
 		result := accountActionResult{
@@ -269,14 +362,54 @@ func (s *Service) deleteAuthFile(ctx context.Context, callbackID string, entry c
 	if !okRaw {
 		return fmt.Errorf("读取凭证失败，无法确认归属")
 	}
-	targetPath, errSafe := safeAuthFileForDelete(s.registry, entry, raw, core.FirstNonEmpty(filePath, entry.Path))
+	targetPath, errSafe := safeAuthFilePath(s.registry, entry, raw, core.FirstNonEmpty(filePath, entry.Path))
 	if errSafe != nil {
 		return errSafe
 	}
 	if errRemove := os.Remove(targetPath); errRemove != nil {
 		return fmt.Errorf("删除文件失败：%w", errRemove)
 	}
-	logger.Info("deleted auth file %s (vendor=%s)", filepath.Base(targetPath), entry.Name)
+	logger.Info("deleted auth file %s (vendor=%s)", filepath.Base(targetPath),
+		credentialVendorLabel(s.registry, raw, filepath.Base(targetPath)))
+	return nil
+}
+
+// credentialVendorLabel 反查凭证真正的供应商标识，供日志使用。
+//
+// 宿主的 auth 记录只有 provider（=本插件）与文件名，Name 常常就是文件名本身；
+// 直接把它当 vendor 写日志会出现 vendor=codearts-codearts-user.json 这种误导
+// （issue #58）。查不到归属时写 unknown，不拿文件名冒充。
+func credentialVendorLabel(registry *core.Registry, raw []byte, fileName string) string {
+	credential, okCredential := registry.ParseCredential(raw, fileName, nil)
+	if !okCredential {
+		return "unknown"
+	}
+	return core.FirstNonEmpty(credential.VendorIDValue(), "unknown")
+}
+
+// setAuthDisabled 在凭证文件上写/清 disabled 标记。
+//
+// 写回沿用凭证保存的两条路径（见 authfile.go）：优先 host.auth.save，宿主会
+// 同时更新磁盘与内存注册表；不可用时才直接写盘，让宿主自己扫到。校验与删除
+// 同源——先确认这份凭证属于本插件、路径是可写的普通 .json。
+func (s *Service) setAuthDisabled(ctx context.Context, callbackID string, entry core.HostAuth, disabled bool) error {
+	raw, filePath, okRaw := hostbridge.AuthJSONAndPath(ctx, callbackID, entry.AuthIndex)
+	if !okRaw {
+		return fmt.Errorf("读取凭证失败，无法确认归属")
+	}
+	targetPath, errSafe := safeAuthFilePath(s.registry, entry, raw, core.FirstNonEmpty(filePath, entry.Path))
+	if errSafe != nil {
+		return errSafe
+	}
+	updated, errUpdate := setCredentialDisabled(raw, disabled)
+	if errUpdate != nil {
+		return errUpdate
+	}
+	if errSave := saveAuthFile(callbackID, filepath.Base(targetPath), updated); errSave != nil {
+		return errSave
+	}
+	logger.Info("auth file %s disabled=%t (vendor=%s)", filepath.Base(targetPath), disabled,
+		credentialVendorLabel(s.registry, raw, filepath.Base(targetPath)))
 	return nil
 }
 
@@ -373,6 +506,43 @@ func maskedAPIKey(key string) string {
 	return trimmed[:4] + "***" + trimmed[len(trimmed)-4:]
 }
 
+// accountAliasRequest 是设置/清除账号别名的请求体。
+type accountAliasRequest struct {
+	FileID string `json:"file_id"`
+	Alias  string `json:"alias"`
+}
+
+// handleAccountAliasRequest 设置或清除某个账号的展示别名。
+//
+// 键用账号身份（FileID）而不是昵称/邮箱：token 刷新、重登都不改凭证文件名，
+// 别名因此自动保留，也不会因为两个账号同昵称而互相覆盖。
+//
+// 别名是纯展示字段（不参与任何 ID 解析），所以允许空格等字符，只做首尾裁剪；
+// 空串表示清除，恢复上游名称。不需要重建宿主模型注册表——账号名只影响本页。
+func (s *Service) handleAccountAliasRequest(req pluginapi.ManagementRequest) pluginapi.ManagementResponse {
+	body, errDecode := decodeRequest[accountAliasRequest](req.Body)
+	if errDecode != nil {
+		return BadJSONRequestResponse()
+	}
+	fileID := strings.TrimSpace(body.FileID)
+	if fileID == "" {
+		return JSONResponse(http.StatusBadRequest, map[string]any{"ok": false, "error": "file_id 不能为空"})
+	}
+	alias := strings.TrimSpace(body.Alias)
+	s.deps.MutateState(func(current *state.State) {
+		if alias == "" {
+			delete(current.AccountAliases, fileID)
+			return
+		}
+		if current.AccountAliases == nil {
+			current.AccountAliases = map[string]string{}
+		}
+		current.AccountAliases[fileID] = alias
+	})
+	logger.Info("account %s alias: %q", fileID, alias)
+	return JSONResponse(http.StatusOK, map[string]any{"ok": true, "alias": alias})
+}
+
 func (s *Service) handleCheckinRequest(req pluginapi.ManagementRequest) pluginapi.ManagementResponse {
 	body, errDecode := decodeRequest[accountBatchRequest](req.Body)
 	if errDecode != nil {
@@ -389,18 +559,10 @@ func (s *Service) handleCheckinRequest(req pluginapi.ManagementRequest) pluginap
 				reason := core.FirstNonEmpty(core.CheckinUnsupportedReason(vendor, credential), "本账号不支持签到")
 				return accountActionOutcome{Message: reason, Skipped: true}, nil
 			}
-			checkin, okCheckin := core.As[core.CheckinProvider](vendor)
-			if !okCheckin {
-				return accountActionOutcome{}, fmt.Errorf("本供应商不提供签到")
-			}
-			result, errCheckin := checkin.Checkin(ctx, credential)
+			result, errCheckin := s.tasks.Checkin(ctx, vendor, credential, tasks.CheckinTriggerManual)
 			if errCheckin != nil {
 				return accountActionOutcome{}, errCheckin
 			}
-			if result == nil {
-				return accountActionOutcome{}, fmt.Errorf("签到未返回结果")
-			}
-			s.tasks.RecordCheckin(credential, result)
 			// NotRecorded 表示这次签到**没有真正完成**（上游窗口未开启、
 			// 领取被拒、未确认发放）。如实标成「跳过」而不是成功，控制台
 			// 就不会显示「签到完成」而用户实际没拿到积分。
