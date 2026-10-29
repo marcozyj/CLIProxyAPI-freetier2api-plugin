@@ -51,8 +51,17 @@ func TestCodeArtsStaticAndAuthModelsStayInSync(t *testing.T) {
 		t.Fatalf("decode model.static: %v", errUnmarshal)
 	}
 
-	authIDs := modelIDSet(t, authResp.Models)
-	staticIDs := modelIDSet(t, staticResp.Models)
+	// 本 fork 默认给模型 ID 加供应商缩写后缀（GLM-5.2 -> GLM-5.2-ca），
+	// 比较（含大小写归一的断言）前先剥掉，使断言只关心「哪些官方模型注册了」。
+	stripTag := func(set map[string]bool) map[string]bool {
+		out := make(map[string]bool, len(set))
+		for id := range set {
+			out[strings.TrimSuffix(id, "-ca")] = true
+		}
+		return out
+	}
+	authIDs := stripTag(modelIDSet(t, authResp.Models))
+	staticIDs := stripTag(modelIDSet(t, staticResp.Models))
 	if len(authIDs) != 3 || len(staticIDs) != 3 {
 		t.Fatalf("两条路径都应返回 2 内置 + 1 福利（大小写重复已合并）: auth=%v static=%v", authIDs, staticIDs)
 	}
