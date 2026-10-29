@@ -219,18 +219,22 @@ input.aliasinput:focus { outline: none; border-color: var(--accent); box-shadow:
 
 /* 窄屏（手机 / 分屏）：表格改卡片，一个模型一张卡；空值与「—」不占行，彻底去掉横向滚动 */
 @media (max-width: 760px) {
-  #models table { min-width: 0; }
-  #models thead { display: none; }
-  #models tbody tr { display: block; margin: 0 0 10px; padding: 4px 2px; border: 1px solid var(--border); border-radius: 12px; }
+  #models table, #accounts table { min-width: 0; }
+  #models thead, #accounts thead { display: none; }
+  #models tbody tr, #accounts table tr { display: block; margin: 0 0 10px; padding: 4px 2px; border: 1px solid var(--border); border-radius: 12px; }
   #models tbody tr.group-row { display: block; margin: 16px 0 4px; padding: 0; border: none; }
   #models tbody tr.group-row td { padding: 0 4px; border-bottom: none; }
-  #models tbody td { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  #models tbody td, #accounts table td { display: flex; align-items: center; justify-content: space-between; gap: 12px;
                      padding: 7px 12px; border-bottom: none; white-space: normal; text-align: right; }
-  #models tbody td::before { content: attr(data-label); color: var(--muted); font-size: 12px; font-weight: 600;
+  #models tbody td::before, #accounts table td[data-label]::before { content: attr(data-label); color: var(--muted); font-size: 12px; font-weight: 600;
                              text-align: left; flex: 0 0 auto; }
   #models tbody td.col-check, #models tbody td.col-status { justify-content: flex-start; gap: 10px; }
   #models tbody td.is-empty { display: none; }
   #models .modelidname, #models .name-text { max-width: 62vw; }
+  /* 账号表的首列是勾选框：保持左对齐，不推到卡片右侧。 */
+  #accounts table td:first-child { justify-content: flex-start; }
+  /* 历史展开行整行是一个 td：卡片化后按普通块展示。 */
+  #accounts table tr + tr td[colspan] { display: block; text-align: left; }
 }
 #models .col-check { width: 1%; text-align: center; padding-left: 8px; padding-right: 4px; }
 #models .col-status, #models .col-vendor { width: 1%; white-space: nowrap; }
@@ -1372,6 +1376,16 @@ details > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
       // 展开行紧随账号行：展开/收起只影响这一个账号，不重排整张表。
       if (historyRow) table.appendChild(historyRow);
     });
+    // 移动端卡片样式靠 data-label 显示字段名：把表头文案镜像到每个 td 上
+    //（模型表在构造时就带 data-label，账号表是在这里统一补齐）。
+    var headNames = [];
+    for (var c = 0; c < head.children.length; c++) headNames.push(head.children[c].textContent);
+    for (var r = 1; r < table.rows.length; r++) {
+      var cells = table.rows[r].children;
+      for (var i = 0; i < cells.length && i < headNames.length; i++) {
+        if (!cells[i].getAttribute("data-label")) cells[i].setAttribute("data-label", headNames[i] || "");
+      }
+    }
     host.appendChild(table);
 
     var summary = el("div", "共 " + accounts.length + (filter ? " 个账号（显示 " + visible.length + " 个）" : " 个账号")
